@@ -1,0 +1,35 @@
+{
+    "manifest_version": 3,
+    "name": "Table Scraper",
+    "version": "1.0",
+
+    "permissions": [
+        "activeTab",
+        "scripting",
+        "downloads",
+        "storage"
+    ],
+    "background": {
+        "service_worker": "background.js",
+        "type": "module"
+    },
+
+    "host_permissions": [
+        "https://rep.modmedapp.com/*"
+    ],
+
+    "action": {
+        "default_popup": "popup.html"
+    },
+
+    "content_scripts": [
+        {
+            "matches": [
+                "https://rep.modmedapp.com/*"
+            ],
+            "js": [
+                "content.js"
+            ]
+        }
+    ]
+}

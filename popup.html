@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Appointment Export</title>
+    <link rel="stylesheet" href="popup.css">
+
+</head>
+
+<body>
+
+    <h2>Export Appointment Data</h2>
+
+    <div class="field-list">
+        <label><input type="checkbox" id="patientName" checked> Patient Name</label>
+
+        <label><input type="checkbox" id="patientNumber"> Patient Number (MRN)</label>
+
+        <label><input type="checkbox" id="phoneNumbers"> Phone Numbers</label>
+
+        <label><input type="checkbox" id="surgeryType"> Surgery Type</label>
+
+        <label><input type="checkbox" id="birthday" > Birthday</label>
+
+        <label><input type="checkbox" id="age" > Age</label>
+
+        <label><input type="checkbox" id="gender" > Gender</label>
+
+        <label><input type="checkbox" id="healthcareProvider"> Healthcare Provider</label>
+
+        <label><input type="checkbox" id="procedureDetails" checked> Procedure Details</label>
+
+        <label><input type="checkbox" id="date"> Date</label>
+
+        <label><input type="checkbox" id="time" checked> Time</label>
+
+        <label><input type="checkbox" id="surgeryCenter"> Surgery Center</label>
+
+        <label><input type="checkbox" id="patientStatus"> Patient Status</label>
+        <hr>
+
+        <label>
+            <input type="checkbox" id="removeLaser" checked>
+            Remove ASC Laser appointments
+        </label>
+        <div id = "error"></div>
+
+    </div>
+
+    <button id="scrape">
+        Export Selected Fields
+    </button>
+
+    <script src="popup.js"></script>
+
+    <!-- for editing docs -->
+    <!-- <script src="https://unpkg.com/docx@9.7.1/build/index.js"></script> -->
+ 
+    <script src="docx.bundle.js"></script>
+
+
+</body>
+
+</html>
