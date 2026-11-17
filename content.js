@@ -449,40 +449,21 @@ function procedureMatchesTarget(target, procedure) {
 
 function findMatchingOverviewProcedures(target, procedures) {
   // Match the TEST (procedure) first. Diagnosis names like "All Tests" are shared
-  // across Optos/CCT/etc — each row has a different visitDiagnosisId (dx.id).
-  // Never match/delete by diagnosis name alone.
-  const wantedDxCatalogId = target.diagnosisCatalogId ? String(target.diagnosisCatalogId) : null;
-
-  let matches = procedures.filter((p) => p.catalogId && procedureMatchesTarget(target, p));
-
-  // If a diagnosis catalog ID was collected, prefer rows under that template,
-  // but still require a procedure match so we don't wipe every "All Tests" row.
-  if (wantedDxCatalogId && matches.length) {
-    const narrowed = matches.filter((p) => String(p.diagnosisCatalogId || "") === wantedDxCatalogId);
-    if (narrowed.length) matches = narrowed;
-  }
-
-  return matches;
+  // across Optos/CCT/etc — each overview diagnoses[] row has a different visit
+  // instance id (dx.id, e.g. 73811429). Never match/delete by diagnosis name or
+  // nested diagnosis catalog id alone (those can be identical for every All Tests row).
+  return procedures.filter((p) => procedureMatchesTarget(target, p));
 }
 
 function findMatchingVisitDiagnoses(target, overview) {
   // Returns unique visit diagnosis rows that contain the matched test procedure.
+  // The row's visitDiagnosisId (diagnoses[].id) is what DELETE /visitDiagnosis/{id} uses.
   const rows = listVisitDiagnosisRows(overview);
   const matched = [];
 
   for (const row of rows) {
     const hitProcedures = row.procedures.filter((p) => procedureMatchesTarget(target, p));
     if (!hitProcedures.length) continue;
-
-    if (
-      target.diagnosisCatalogId &&
-      row.diagnosisCatalogId &&
-      String(row.diagnosisCatalogId) !== String(target.diagnosisCatalogId)
-    ) {
-      // Keep as candidate only if no catalog id was set on the row.
-      // If both exist and differ, skip.
-      continue;
-    }
 
     matched.push({
       visitDiagnosisId: row.visitDiagnosisId,
@@ -706,26 +687,8 @@ async function loadVisitOverview(visitId, { forceProbe = false } = {}) {
 }
 
 function listOverviewProcedures(overview) {
-  const diagnoses = [].concat(overview.diagnoses || []);
-  const out = [];
-
-  for (const dx of diagnoses) {
-    const dxName = dx.diagnosisName || dx.diagnosisNameWithRO || dx.diagnosis?.diagnosisName || "";
-    const diagnosisCatalogId = dx.diagnosis?.id != null ? String(dx.diagnosis.id) : null;
-
-    for (const p of dx.procedures || []) {
-      out.push({
-        name: p.procedure || p.veProcedure?.name || "",
-        alias: p.veProcedure?.procedureAlias || "",
-        catalogId: p.veProcedure?.id != null ? String(p.veProcedure.id) : null,
-        visitProcedureId: p.id != null ? String(p.id) : null,
-        diagnosisName: dxName || null,
-        diagnosisCatalogId
-      });
-    }
-  }
-
-  return out.filter((p) => p.catalogId);
+  // Prefer the detailed path so callers keep visitDiagnosisId (diagnoses[].id).
+  return listOverviewProceduresDetailed(overview).filter((p) => p.catalogId || p.name || p.alias);
 }
 
 async function getTrackedTargets() {
@@ -749,12 +712,10 @@ async function getTrackedTargets() {
 }
 
 function collectCatalogFromOverview(overview, targets) {
-  // Walk diagnoses[] rows. Many can be named "All Tests"; each has a unique visitDiagnosisId.
-  // Identify the test by procedure under that row, then store:
-  // - procedureCatalogId (stable test id)
-  // - diagnosisCatalogId (nested diagnosis.id template)
-  // - diagnosisName (e.g. All Tests) for display
-  // visitDiagnosisId is per-visit and resolved again at check/delete time.
+  // Walk overview diagnoses[] rows. Many can be named "All Tests"; each has a unique
+  // visit instance id (diagnoses[].id, e.g. 73811429). Identify the test by the
+  // procedure under that row, then store procedureCatalogId for reliable rematch.
+  // visitDiagnosisId is per-visit — resolve it again at check/delete time from overview.
   const found = [];
 
   for (const target of targets) {
@@ -771,6 +732,7 @@ function collectCatalogFromOverview(overview, targets) {
       procedureAlias: primaryProc.alias || null,
       procedures: primaryRow.procedures,
       diagnosisName: primaryRow.diagnosisName,
+      // Nested diagnosis.id is only display/context — often identical for every All Tests row.
       diagnosisCatalogId: primaryRow.diagnosisCatalogId || target.diagnosisCatalogId || null,
       visitDiagnosisId: primaryRow.visitDiagnosisId,
       matchedBy: "visit-diagnosis-procedure"
@@ -940,6 +902,8 @@ async function collectProtocolIdsForTargets() {
     if (m.procedureCatalogId) tracked[i].procedureCatalogId = m.procedureCatalogId;
     if (m.procedureName) tracked[i].procedureName = m.procedureName;
     if (m.procedureAlias) tracked[i].procedureAlias = m.procedureAlias;
+    if (m.diagnosisName) tracked[i].diagnosisName = m.diagnosisName;
+    if (m.diagnosisCatalogId) tracked[i].diagnosisCatalogId = m.diagnosisCatalogId;
 
     // Persist ModMed's real procedure wording as aliases for future matches.
     const aliasSet = new Set(parseAliases(tracked[i].aliases));
@@ -959,7 +923,7 @@ async function collectProtocolIdsForTargets() {
     mappings: targets.map((t) => mappings[t.key]),
     captureCount: readCaptureLog().length,
     note:
-      "Collect stores procedureCatalogId + diagnosisCatalogId from the diagnoses[] row that contains the test. Multiple rows can be named All Tests; Remove deletes only the visitDiagnosis id for the matched row."
+      "Collect stores procedureCatalogId from the overview diagnoses[] row that contains the test. Multiple rows can be named All Tests; each has its own diagnoses[].id (visitDiagnosisId). Check/Remove resolve that id per visit and DELETE only that row."
   };
 }
 
@@ -977,42 +941,33 @@ async function checkTargetsApplied() {
   const stored = await chrome.storage.local.get(["protocolMappings"]);
   const mappings = stored.protocolMappings || {};
   const overview = await loadVisitOverview(visitId);
-  
-  // Ensure these exist or fallback to empty arrays to prevent reference errors
-  const catalogHits = overview.catalogHits || [];
-  const hitKeys = overview.hitKeys || [];
 
   const results = targets.map((target) => {
     const mapping = mappings[target.key] || emptyMapping(target);
-    const overviewHit = catalogHits.find((h) => h.key === target.key) || null;
-    
-    const wantedIds = new Set(
-      []
-        .concat(mapping.procedureCatalogId ? [String(mapping.procedureCatalogId)] : [])
-        .concat(target.procedureCatalogId ? [String(target.procedureCatalogId)] : [])
-        .concat(mapping.procedureCatalogIds || [])
-        .map(String)
-    );
-
-    // Properly formed object instead of mixing it into new Set()
     const merged = {
-      wantedIds,
-      diagnosisCatalogId: target.diagnosisCatalogId || mapping.diagnosisCatalogId || null,
+      ...target,
+      procedureCatalogId: target.procedureCatalogId || mapping.procedureCatalogId || null,
+      procedureCatalogIds: []
+        .concat(target.procedureCatalogId || [])
+        .concat(mapping.procedureCatalogId || [])
+        .concat(mapping.procedureCatalogIds || [])
+        .map(String),
       procedureName: mapping.procedureName || target.procedureName || null,
       procedureAlias: mapping.procedureAlias || target.procedureAlias || null,
       aliases: parseAliases([].concat(target.aliases || []).concat(mapping.aliases || []))
     };
 
+    // Match the procedure under an overview diagnoses[] row; use that row's id
+    // (e.g. 73811429) — not the shared "All Tests" name / nested diagnosis catalog.
     const matchedRows = findMatchingVisitDiagnoses(merged, overview.data);
     const matchedRow = matchedRows[0] || null;
     const matchedProcedure = matchedRow?.procedures?.[0] || null;
     const applied = Boolean(matchedRow);
 
-    let reason = "not found on visit overview";
+    let reason = "not found on visit overview diagnoses[]";
     if (matchedRow) {
       reason =
-        `visitDiagnosis ${matchedRow.visitDiagnosisId} (${matchedRow.diagnosisName || "Diagnosis"}) · ` +
-        `dxCatalog ${matchedRow.diagnosisCatalogId || "?"} · ` +
+        `diagnoses[].id ${matchedRow.visitDiagnosisId} (${matchedRow.diagnosisName || "Diagnosis"}) · ` +
         `proc ${matchedProcedure?.catalogId || "?"} (${matchedProcedure?.name || target.name})`;
     } else if (!merged.procedureCatalogId) {
       reason = "missing procedureCatalogId — run Collect in Settings while this test is applied";
@@ -1026,7 +981,7 @@ async function checkTargetsApplied() {
       mapping: merged,
       matchedProcedure,
       visitDiagnosisId: matchedRow?.visitDiagnosisId || null,
-      diagnosisCatalogId: matchedRow?.diagnosisCatalogId || merged.diagnosisCatalogId || null
+      diagnosisName: matchedRow?.diagnosisName || null
     };
   });
 
@@ -1036,7 +991,6 @@ async function checkTargetsApplied() {
     results,
     applied: results.filter((r) => r.applied).map((r) => r.name),
     missing: results.filter((r) => !r.applied).map((r) => r.name),
-    knownKeys: Object.keys(mappings),
-    hitKeys: [...hitKeys]
+    knownKeys: Object.keys(mappings)
   };
 }

@@ -110,10 +110,10 @@ function emptyMapping(target) {
     name: target.name,
     aliases: Array.isArray(target.aliases) ? target.aliases : [],
     protocolId: target.protocolId != null ? String(target.protocolId) : null,
-    // Detect / delete keys:
-    // - procedureCatalogId: which test (Optos vs CCT)
-    // - diagnosisCatalogId: which diagnosis bucket that test lives under
-    //   (e.g. different "All Tests" diagnosis ids per test type)
+    // Detect keys:
+    // - procedureCatalogId: which test (Optos vs CCT) under an overview diagnoses[] row
+    // Delete uses diagnoses[].id (visitDiagnosisId) resolved per visit — not stored here.
+    // diagnosisCatalogId / diagnosisName are optional context only (often identical for All Tests).
     procedureCatalogId: target.procedureCatalogId != null ? String(target.procedureCatalogId) : null,
     procedureName: target.procedureName || null,
     procedureAlias: target.procedureAlias || null,

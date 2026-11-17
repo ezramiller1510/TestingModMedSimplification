@@ -92,7 +92,6 @@ function renderSettingsList(tracked, mappings) {
     const m = mappings[target.key] || emptyMapping(target);
     const protocolId = target.protocolId || m.protocolId || null;
     const procedureId = m.procedureCatalogId || target.procedureCatalogId || null;
-    const diagnosisId = m.diagnosisCatalogId || target.diagnosisCatalogId || null;
     const procLabel = m.procedureName || m.procedureAlias || "";
     const dxLabel = m.diagnosisName || target.diagnosisName || "";
 
@@ -105,9 +104,8 @@ function renderSettingsList(tracked, mappings) {
       </div>
       <span class="${protocolId ? "ok" : "missing-text"}">protocolId: ${protocolId || "missing"}</span><br>
       <span class="${procedureId ? "ok" : "missing-text"}">procedureCatalogId: ${procedureId || "missing"}</span>
-      ${procLabel ? ` <span>(${procLabel})</span>` : ""}<br>
-      <span class="${diagnosisId ? "ok" : "missing-text"}">diagnosisCatalogId: ${diagnosisId || "missing"}</span>
-      ${dxLabel ? ` <span>(${dxLabel})</span>` : ""}
+      ${procLabel ? ` <span>(${procLabel})</span>` : ""}
+      ${dxLabel ? `<br><span class="muted">last matched under: ${dxLabel}</span>` : ""}
       ${(target.aliases || []).length ? `<br><span class="muted">aliases: ${target.aliases.join(", ")}</span>` : ""}
     `;
     row.querySelector("strong").textContent = target.name;
@@ -178,7 +176,9 @@ function renderMainList(results, abnSelections, applySelections = {}) {
 
     const status = document.createElement("span");
     status.className = `status ${r.applied ? "applied" : "missing"}`;
-    status.textContent = r.applied ? "Applied" : "Not applied";
+    status.textContent = r.applied
+      ? `Applied · dx ${r.visitDiagnosisId || "?"}`
+      : "Not applied";
     status.title = r.reason || "";
 
     top.appendChild(selectWrap);
@@ -344,8 +344,7 @@ $("addBtn").addEventListener("click", async () => {
       name: $("newName").value,
       protocolId: $("newProtocolId").value,
       aliases: $("newAliases").value,
-      procedureCatalogId: $("newProcedureId").value,
-      diagnosisCatalogId: $("newDiagnosisId").value
+      procedureCatalogId: $("newProcedureId").value
     });
     const state = await loadState();
     const filtered = state.tracked.filter(
@@ -370,7 +369,6 @@ $("addBtn").addEventListener("click", async () => {
     $("newProtocolId").value = "";
     $("newAliases").value = "";
     $("newProcedureId").value = "";
-    $("newDiagnosisId").value = "";
     await refreshSettings(`Tracking “${item.name}”.`);
   } catch (err) {
     $("settingsStatus").textContent = err.message;
@@ -382,10 +380,14 @@ $("collectBtn").addEventListener("click", async () => {
   try {
     const response = await sendToTab("COLLECT_PROTOCOL_IDS");
     if (!response?.success) throw new Error(response?.error || "Collect failed");
-    const lines = (response.mappings || []).map(
-      (m) =>
-        `- ${m.name}: protocolId=${m.protocolId || "?"} procedureCatalogId=${m.procedureCatalogId || "?"} diagnosisCatalogId=${m.diagnosisCatalogId || "?"} (${m.diagnosisName || "—"})`
-    );
+    const lines = (response.mappings || []).map((m) => {
+      const hit = (response.catalogHits || []).find((h) => h.key === m.key);
+      const visitDx = hit?.visitDiagnosisId ? ` visitDiagnosisId=${hit.visitDiagnosisId}` : "";
+      return (
+        `- ${m.name}: protocolId=${m.protocolId || "?"} procedureCatalogId=${m.procedureCatalogId || "?"}` +
+        `${visitDx} (${m.diagnosisName || hit?.diagnosisName || "—"})`
+      );
+    });
     await refreshSettings(
       [`Visit: ${response.visitId}`, "", ...lines, response.note ? `\n${response.note}` : ""]
         .filter(Boolean)

@@ -224,9 +224,10 @@
 
   <div id="settingsTab" class="hidden">
     <p class="hint">
-      Add protocols to track. Apply uses protocolId. Detect finds the diagnoses[] row that
-      contains the test (many can be named “All Tests”, each with its own visitDiagnosis id).
-      Collect stores procedureCatalogId + diagnosisCatalogId from that row.
+      Add protocols to track. Apply uses protocolId. Detect walks overview diagnoses[] and
+      finds the row whose procedures match the test (several rows can be named “All Tests”;
+      each has its own diagnoses[].id such as 73811429). Collect stores procedureCatalogId
+      from that row; Remove DELETEs that visitDiagnosis id.
     </p>
 
     <div class="add-box">
@@ -234,7 +235,6 @@
       <div class="row"><input id="newProtocolId" class="custom-input" placeholder="Protocol ID (apply)" /></div>
       <div class="row"><input id="newAliases" class="custom-input" placeholder="Optional aliases (comma-separated)" /></div>
       <div class="row"><input id="newProcedureId" class="custom-input" placeholder="Optional procedure catalog ID (detect)" /></div>
-      <div class="row"><input id="newDiagnosisId" class="custom-input" placeholder="Optional diagnosis catalog ID (detect/delete)" /></div>
       <button id="addBtn" class="action secondary" type="button">Add to tracked tests</button>
     </div>
 
