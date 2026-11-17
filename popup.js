@@ -1,19 +1,11 @@
-function gatherProtocols() {
-  const checked = Array.from(document.querySelectorAll('input[name="protocol"]:checked')).map((cb) => ({
-    id: cb.value.trim(),
-    name: cb.dataset.name || cb.parentElement?.textContent?.trim() || cb.value.trim()
-  }));
+const BUTTON_IDS = ["collectBtn", "checkBtn", "copyBtn", "applyMappedBtn"];
 
-  const customRaw = document.getElementById("customId").value.trim();
-  const custom = customRaw
-    ? customRaw.split(",").map((id) => id.trim()).filter(Boolean).map((id) => ({ id, name: id }))
-    : [];
-
-  const byId = new Map();
-  [...checked, ...custom].forEach((p) => {
-    if (p.id) byId.set(p.id, p);
+function setBusy(busy, statusText) {
+  BUTTON_IDS.forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = busy;
   });
-  return [...byId.values()];
+  if (statusText != null) document.getElementById("status").textContent = statusText;
 }
 
 async function getActiveModMedTab() {
@@ -24,54 +16,73 @@ async function getActiveModMedTab() {
   return tab;
 }
 
-function setBusy(busy, statusText) {
-  const statusEl = document.getElementById("status");
-  ["applyBtn", "testBtn", "captureBtn"].forEach((id) => {
-    const el = document.getElementById(id);
-    if (el) el.disabled = busy;
+function sendToTab(action, payload = {}) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const tab = await getActiveModMedTab();
+      chrome.tabs.sendMessage(tab.id, { action, ...payload }, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error("Connection failed—try refreshing the ModMed tab."));
+          return;
+        }
+        resolve(response);
+      });
+    } catch (err) {
+      reject(err);
+    }
   });
-  if (statusText != null) statusEl.textContent = statusText;
 }
 
-function shortUrl(url) {
-  try {
-    const u = new URL(url);
-    return u.pathname + u.search;
-  } catch {
-    return url;
-  }
+async function loadMappings() {
+  const stored = await chrome.storage.local.get(["protocolMappings"]);
+  return stored.protocolMappings || {};
 }
 
-function formatCheckResult(response) {
-  if (!response?.success) {
-    return "Error: " + (response?.error || "Unknown error");
-  }
+function renderTargets(mappings) {
+  const list = document.getElementById("targetList");
+  const select = document.getElementById("manualTarget");
+  list.innerHTML = "";
+  select.innerHTML = "";
 
-  const lines = [];
-  if (response.visitId) lines.push(`Visit: ${response.visitId}`);
-  lines.push(`Captured calls so far: ${response.captureCount ?? 0}`);
+  PROTOCOL_TARGETS.forEach((target) => {
+    const m = mappings[target.key] || emptyMapping(target);
+    const hasProtocol = Boolean(m.protocolId);
+    const hasDiagnosis = Boolean(m.diagnosisCatalogId);
+    const procCount = (m.procedureCatalogIds || []).length;
 
-  const matched = response.appliedIds || [];
-  const missing = response.missingIds || [];
+    const row = document.createElement("div");
+    row.className = "target";
+    row.innerHTML =
+      `<strong>${target.name}</strong><br>` +
+      `<span class="${hasProtocol ? "ok" : "missing"}">protocolId: ${m.protocolId || "missing"}</span><br>` +
+      `<span class="${hasDiagnosis ? "ok" : "missing"}">diagnosisCatalogId: ${m.diagnosisCatalogId || "missing"}</span>` +
+      (m.diagnosisName ? ` <span>(${m.diagnosisName})</span>` : "") +
+      `<br><span class="${procCount ? "ok" : "missing"}">procedures: ${procCount}</span>`;
+    list.appendChild(row);
 
-  if (matched.length) lines.push(`Found IDs: ${matched.join(", ")}`);
-  if (missing.length) lines.push(`Not found yet: ${missing.join(", ")}`);
+    const opt = document.createElement("option");
+    opt.value = target.key;
+    opt.textContent = target.name;
+    select.appendChild(opt);
+  });
+}
 
-  const hits = response.hits || [];
-  if (hits.length) {
-    lines.push("", "Hits:");
-    hits.slice(0, 12).forEach((h, i) => {
-      lines.push(`${i + 1}. [${h.method} ${h.status}] ${h.where}`);
-      lines.push(`   ${shortUrl(h.url)}`);
-      if (h.snippet) lines.push(`   …${h.snippet}…`);
-    });
-  }
+function formatCollectResult(response) {
+  if (!response?.success) return "Error: " + (response?.error || "Unknown error");
 
-  const readable = response.readableEndpoints || [];
-  if (!hits.length && readable.length) {
-    lines.push("", "Endpoints that returned data (no ID match):");
-    readable.slice(0, 8).forEach((e) => lines.push(`- ${shortUrl(e.url)}`));
-  }
+  const lines = [
+    `Visit: ${response.visitId}`,
+    `Overview source: ${response.overviewSource}`,
+    `Captured calls: ${response.captureCount}`,
+    "",
+    "Mappings:"
+  ];
+
+  (response.mappings || []).forEach((m) => {
+    lines.push(
+      `- ${m.name}: protocolId=${m.protocolId || "?"} diagnosis=${m.diagnosisCatalogId || "?"} procs=[${(m.procedureCatalogIds || []).join(", ")}]`
+    );
+  });
 
   if (response.note) {
     lines.push("", response.note);
@@ -80,110 +91,107 @@ function formatCheckResult(response) {
   return lines.join("\n");
 }
 
-function formatCaptureSummary(response) {
-  if (!response?.success) {
-    return "Error: " + (response?.error || "Unknown error");
-  }
+function formatCheckResult(response) {
+  if (!response?.success) return "Error: " + (response?.error || "Unknown error");
 
-  const lines = [`Captured ${response.count} API call(s).`];
-  (response.recent || []).forEach((e, i) => {
-    lines.push(`${i + 1}. [${e.method} ${e.status}] ${shortUrl(e.url)}`);
+  const lines = [`Visit: ${response.visitId}`, ""];
+  (response.results || []).forEach((r) => {
+    lines.push(`${r.applied ? "✓" : "·"} ${r.name}: ${r.reason}`);
   });
-
-  if (!response.count) {
-    lines.push(
-      "",
-      "Nothing captured yet. Keep this ModMed tab open, click around Special Testing / Protocols / the visit note, then reopen this popup."
-    );
-  } else {
-    lines.push("", "Tip: select an ID and click Test — it searches these captured bodies for that ID.");
-  }
-
+  lines.push("", `Applied: ${(response.applied || []).join(", ") || "none"}`);
+  lines.push(`Missing: ${(response.missing || []).join(", ") || "none"}`);
   return lines.join("\n");
 }
 
-document.getElementById("testBtn").addEventListener("click", async () => {
-  const protocols = gatherProtocols();
-  if (protocols.length === 0) {
-    setBusy(false, "Select or enter at least one protocol ID to test.");
+async function refreshUi(statusText) {
+  const mappings = await loadMappings();
+  renderTargets(mappings);
+  if (statusText != null) document.getElementById("status").textContent = statusText;
+}
+
+document.getElementById("collectBtn").addEventListener("click", async () => {
+  setBusy(true, "Collecting from visit overview + captured traffic...");
+  try {
+    const response = await sendToTab("COLLECT_PROTOCOL_IDS");
+    await refreshUi(formatCollectResult(response));
+  } catch (err) {
+    setBusy(false, err.message);
+    return;
+  }
+  setBusy(false);
+});
+
+document.getElementById("checkBtn").addEventListener("click", async () => {
+  setBusy(true, "Checking visit overview for collected catalog IDs...");
+  try {
+    const response = await sendToTab("CHECK_TARGETS_APPLIED");
+    await refreshUi(formatCheckResult(response));
+  } catch (err) {
+    setBusy(false, err.message);
+    return;
+  }
+  setBusy(false);
+});
+
+document.getElementById("copyBtn").addEventListener("click", async () => {
+  const mappings = await loadMappings();
+  const payload = PROTOCOL_TARGETS.map((t) => mappings[t.key] || emptyMapping(t));
+  const text = JSON.stringify(payload, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    document.getElementById("status").textContent = "Copied mappings JSON to clipboard.";
+  } catch {
+    document.getElementById("status").textContent = text;
+  }
+});
+
+document.getElementById("applyMappedBtn").addEventListener("click", async () => {
+  await saveManualProtocolId();
+  const refreshed = await loadMappings();
+  const uniqueIds = [
+    ...new Set(PROTOCOL_TARGETS.map((t) => refreshed[t.key]?.protocolId).filter(Boolean))
+  ];
+
+  if (!uniqueIds.length) {
+    document.getElementById("status").textContent =
+      "No protocolIds collected yet. Open Protocols UI, capture traffic, Collect, or enter an ID manually below.";
     return;
   }
 
-  setBusy(true, "Probing endpoints + searching captured traffic...");
+  setBusy(true, `Applying protocolIds: ${uniqueIds.join(", ")}...`);
 
   try {
-    const tab = await getActiveModMedTab();
-
-    chrome.tabs.sendMessage(tab.id, { action: "CHECK_APPLIED_PROTOCOLS", protocols }, (response) => {
-      setBusy(false);
-
-      if (chrome.runtime.lastError) {
-        document.getElementById("status").textContent =
-          "Connection failed—try refreshing the ModMed tab.";
-        return;
-      }
-
-      document.getElementById("status").textContent = formatCheckResult(response);
-    });
+    const response = await sendToTab("APPLY_PROTOCOLS", { protocolIds: uniqueIds });
+    if (response?.success) {
+      setBusy(false, "Applied! Reloading page...");
+      setTimeout(() => window.close(), 600);
+    } else {
+      setBusy(false, "Error: " + (response?.error || "Unknown error"));
+    }
   } catch (err) {
     setBusy(false, err.message);
   }
 });
 
-document.getElementById("captureBtn").addEventListener("click", async () => {
-  setBusy(true, "Reading capture log...");
+async function saveManualProtocolId() {
+  const protocolId = document.getElementById("manualProtocolId").value.trim();
+  const key = document.getElementById("manualTarget").value;
+  if (!protocolId) return;
 
-  try {
-    const tab = await getActiveModMedTab();
+  const mappings = await loadMappings();
+  const target = PROTOCOL_TARGETS.find((t) => t.key === key);
+  const current = mappings[key] || emptyMapping(target);
+  current.protocolId = protocolId;
+  current.updatedAt = new Date().toISOString();
+  current.sources = [...new Set([...(current.sources || []), "manual"])];
+  mappings[key] = current;
+  await chrome.storage.local.set({ protocolMappings: mappings });
+  await refreshUi(`Saved protocolId ${protocolId} for ${target.name}.`);
+}
 
-    chrome.tabs.sendMessage(tab.id, { action: "GET_CAPTURE_SUMMARY" }, (response) => {
-      setBusy(false);
-
-      if (chrome.runtime.lastError) {
-        document.getElementById("status").textContent =
-          "Connection failed—try refreshing the ModMed tab.";
-        return;
-      }
-
-      document.getElementById("status").textContent = formatCaptureSummary(response);
-    });
-  } catch (err) {
-    setBusy(false, err.message);
-  }
+document.getElementById("manualProtocolId").addEventListener("change", saveManualProtocolId);
+document.getElementById("manualTarget").addEventListener("change", () => {
+  // keep typed id ready to save against newly selected target
 });
 
-document.getElementById("applyBtn").addEventListener("click", async () => {
-  const protocols = gatherProtocols();
-  const protocolIds = protocols.map((p) => p.id);
-
-  if (protocolIds.length === 0) {
-    setBusy(false, "Select or enter at least one protocol ID.");
-    return;
-  }
-
-  setBusy(true, "Applying...");
-
-  try {
-    const tab = await getActiveModMedTab();
-
-    chrome.tabs.sendMessage(tab.id, { action: "APPLY_PROTOCOLS", protocolIds }, (response) => {
-      setBusy(false);
-
-      if (chrome.runtime.lastError) {
-        document.getElementById("status").textContent =
-          "Connection failed—try refreshing the ModMed tab.";
-        return;
-      }
-
-      if (response?.success) {
-        document.getElementById("status").textContent = "Applied! Reloading page...";
-        setTimeout(() => window.close(), 600);
-      } else {
-        document.getElementById("status").textContent =
-          "Error: " + (response?.error || "Unknown error");
-      }
-    });
-  } catch (err) {
-    setBusy(false, err.message);
-  }
-});
+refreshUi("");

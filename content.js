@@ -51,6 +51,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (message.action === "COLLECT_PROTOCOL_IDS") {
+    collectProtocolIdsForTargets()
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "CHECK_TARGETS_APPLIED") {
+    checkTargetsApplied()
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
 
 function getActiveVisitId() {
@@ -288,4 +302,295 @@ async function applyProtocolsToVisit(protocolIds) {
   if (!res.ok) throw new Error(`ModMed API returned ${res.status}`);
 
   window.location.reload();
+}
+
+function parseJsonSafe(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function buildOverviewUrls(visitId) {
+  const base = `https://rep.modmedapp.com/ema/ws/v3/visits/${visitId}`;
+  return [
+    `${base}/overview`,
+    `${base}/visitOverview`,
+    `${base}?selector=diagnoses`,
+    `${base}?selector=${encodeURIComponent("diagnoses(diagnosisName,diagnosis,procedures,veProcedure,specialPlan,specialDiagnosisType)")}`,
+    `${base}?selector=${encodeURIComponent("unworthyDiagnoses,diagnoses")}`
+  ];
+}
+
+async function loadVisitOverview(visitId) {
+  // Prefer a captured overview body (has impressionsPlansDto) if present.
+  for (const entry of readCaptureLog().slice().reverse()) {
+    if (!entry.body || !/impressionsPlansDto|unworthyDiagnoses|"diagnoses"\s*:/.test(entry.body)) {
+      continue;
+    }
+    if (!String(entry.url || "").includes(String(visitId))) continue;
+    const parsed = parseJsonSafe(entry.body);
+    if (parsed && (parsed.diagnoses || parsed.visit || parsed.impressionsPlansDto)) {
+      return { data: parsed, url: entry.url, source: "capture" };
+    }
+  }
+
+  for (const url of buildOverviewUrls(visitId)) {
+    try {
+      const { ok, text } = await fetchText(url);
+      if (!ok) continue;
+      const parsed = parseJsonSafe(text);
+      if (!parsed) continue;
+      if (parsed.diagnoses || parsed.impressionsPlansDto || parsed.unworthyDiagnoses) {
+        return { data: parsed, url, source: "probe" };
+      }
+    } catch {
+      // try next
+    }
+  }
+
+  throw new Error(
+    "Could not load visit overview. Open Visit Overview in ModMed so it appears in captured traffic, then collect again."
+  );
+}
+
+function collectCatalogFromOverview(overview) {
+  const diagnoses = []
+    .concat(overview.diagnoses || [])
+    .concat(overview.unworthyDiagnoses || []);
+
+  const found = [];
+
+  for (const dx of diagnoses) {
+    const dxName = dx.diagnosisName || dx.diagnosisNameWithRO || dx.diagnosis?.diagnosisName || "";
+    const catalogId = dx.diagnosis?.id != null ? String(dx.diagnosis.id) : null;
+    const procedures = (dx.procedures || []).map((p) => ({
+      name: p.procedure || p.veProcedure?.name || "",
+      alias: p.veProcedure?.procedureAlias || "",
+      catalogId: p.veProcedure?.id != null ? String(p.veProcedure.id) : null,
+      visitProcedureId: p.id != null ? String(p.id) : null
+    }));
+
+    for (const target of PROTOCOL_TARGETS) {
+      const nameHit = targetMatchesText(target, dxName);
+      const procedureHits = procedures.filter(
+        (p) => targetMatchesText(target, p.name) || targetMatchesText(target, p.alias)
+      );
+
+      if (!nameHit && procedureHits.length === 0) continue;
+
+      found.push({
+        key: target.key,
+        name: target.name,
+        diagnosisName: dxName || null,
+        diagnosisCatalogId: catalogId,
+        visitDiagnosisId: dx.id != null ? String(dx.id) : null,
+        specialPlan: Boolean(dx.diagnosis?.specialPlan || dx.specialPlan),
+        procedures: nameHit ? procedures.filter((p) => p.catalogId) : procedureHits,
+        matchedBy: nameHit ? "diagnosis-name" : "procedure-name"
+      });
+    }
+  }
+
+  return found;
+}
+
+function walkProtocolCandidates(value, out = [], seen = new Set()) {
+  if (value == null || typeof value !== "object") return out;
+  if (seen.has(value)) return out;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => walkProtocolCandidates(item, out, seen));
+    return out;
+  }
+
+  const name =
+    value.name ||
+    value.protocolName ||
+    value.label ||
+    value.title ||
+    value.displayName ||
+    "";
+  const id =
+    value.protocolId ??
+    value.protocolDefinitionId ??
+    value.masterVisitId ??
+    value.id;
+
+  if (name && id != null && /^\d+$/.test(String(id))) {
+    out.push({ name: String(name), protocolId: String(id), raw: value });
+  }
+
+  Object.values(value).forEach((child) => {
+    if (child && typeof child === "object") walkProtocolCandidates(child, out, seen);
+  });
+
+  return out;
+}
+
+function collectProtocolIdsFromCapture() {
+  const hits = [];
+
+  for (const entry of readCaptureLog()) {
+    const body = entry.body || "";
+    if (!body) continue;
+
+    const looksUseful =
+      /protocol/i.test(entry.url || "") ||
+      /protocol/i.test(body) ||
+      entry.method === "POST";
+    if (!looksUseful) continue;
+
+    const parsed = parseJsonSafe(body);
+    if (!parsed) continue;
+
+    for (const candidate of walkProtocolCandidates(parsed)) {
+      for (const target of PROTOCOL_TARGETS) {
+        if (!targetMatchesText(target, candidate.name)) continue;
+        hits.push({
+          key: target.key,
+          name: target.name,
+          protocolId: candidate.protocolId,
+          protocolName: candidate.name,
+          sourceUrl: entry.url,
+          method: entry.method
+        });
+      }
+    }
+  }
+
+  return hits;
+}
+
+function mergeMapping(existing, patch, source) {
+  const next = existing ? { ...existing } : emptyMapping(PROTOCOL_TARGETS.find((t) => t.key === patch.key) || patch);
+  const sources = new Set(next.sources || []);
+
+  if (patch.protocolId) next.protocolId = String(patch.protocolId);
+  if (patch.diagnosisCatalogId) next.diagnosisCatalogId = String(patch.diagnosisCatalogId);
+  if (patch.diagnosisName) next.diagnosisName = patch.diagnosisName;
+
+  const procMap = new Map((next.procedures || []).map((p) => [String(p.catalogId), p]));
+  for (const p of patch.procedures || []) {
+    if (!p.catalogId) continue;
+    procMap.set(String(p.catalogId), {
+      name: p.name || "",
+      alias: p.alias || "",
+      catalogId: String(p.catalogId)
+    });
+  }
+  next.procedures = [...procMap.values()];
+  next.procedureCatalogIds = next.procedures.map((p) => p.catalogId);
+
+  if (source) sources.add(source);
+  next.sources = [...sources];
+  next.updatedAt = new Date().toISOString();
+  return next;
+}
+
+async function collectProtocolIdsForTargets() {
+  const visitId = getActiveVisitId();
+  if (!visitId) {
+    throw new Error("Could not detect Visit ID. Open a visit note first.");
+  }
+
+  const overview = await loadVisitOverview(visitId);
+  const catalogHits = collectCatalogFromOverview(overview.data);
+  const protocolHits = collectProtocolIdsFromCapture();
+
+  const stored = await chrome.storage.local.get(["protocolMappings"]);
+  const mappings = { ...(stored.protocolMappings || {}) };
+
+  for (const target of PROTOCOL_TARGETS) {
+    if (!mappings[target.key]) mappings[target.key] = emptyMapping(target);
+  }
+
+  for (const hit of catalogHits) {
+    mappings[hit.key] = mergeMapping(mappings[hit.key], hit, `overview:${overview.source}`);
+  }
+
+  for (const hit of protocolHits) {
+    mappings[hit.key] = mergeMapping(
+      mappings[hit.key],
+      { key: hit.key, name: hit.name, protocolId: hit.protocolId, procedures: [] },
+      `capture:${hit.method}`
+    );
+  }
+
+  await chrome.storage.local.set({ protocolMappings: mappings });
+
+  return {
+    visitId,
+    overviewUrl: overview.url,
+    overviewSource: overview.source,
+    catalogHits,
+    protocolHits,
+    mappings: PROTOCOL_TARGETS.map((t) => mappings[t.key]),
+    captureCount: readCaptureLog().length,
+    note:
+      protocolHits.length === 0
+        ? "Catalog IDs can come from Visit Overview. Protocol apply IDs need a Protocols list/search or apply POST in captured traffic — open Protocols UI, search these names, then Collect again."
+        : undefined
+  };
+}
+
+async function checkTargetsApplied() {
+  const visitId = getActiveVisitId();
+  if (!visitId) {
+    throw new Error("Could not detect Visit ID. Open a visit note first.");
+  }
+
+  const stored = await chrome.storage.local.get(["protocolMappings"]);
+  const mappings = stored.protocolMappings || {};
+  const overview = await loadVisitOverview(visitId);
+  const catalogHits = collectCatalogFromOverview(overview.data);
+  const hitKeys = new Set(catalogHits.map((h) => h.key));
+
+  const results = PROTOCOL_TARGETS.map((target) => {
+    const mapping = mappings[target.key] || emptyMapping(target);
+    const overviewHit = catalogHits.find((h) => h.key === target.key) || null;
+
+    let applied = false;
+    let reason = "not found on visit overview";
+
+    if (mapping.diagnosisCatalogId && overviewHit?.diagnosisCatalogId === mapping.diagnosisCatalogId) {
+      applied = true;
+      reason = `diagnosis catalog ${mapping.diagnosisCatalogId}`;
+    } else if (overviewHit) {
+      applied = true;
+      reason = `matched ${overviewHit.matchedBy}: ${overviewHit.diagnosisName || overviewHit.procedures?.[0]?.name || target.name}`;
+    } else if (mapping.procedureCatalogIds?.length) {
+      const allProcs = []
+        .concat(overview.data.diagnoses || [])
+        .flatMap((d) => d.procedures || []);
+      const match = allProcs.find((p) =>
+        mapping.procedureCatalogIds.includes(String(p.veProcedure?.id))
+      );
+      if (match) {
+        applied = true;
+        reason = `procedure catalog ${match.veProcedure.id}`;
+      }
+    }
+
+    return {
+      key: target.key,
+      name: target.name,
+      applied,
+      reason,
+      mapping,
+      overviewHit
+    };
+  });
+
+  return {
+    visitId,
+    overviewUrl: overview.url,
+    results,
+    applied: results.filter((r) => r.applied).map((r) => r.name),
+    missing: results.filter((r) => !r.applied).map((r) => r.name),
+    knownKeys: Object.keys(mappings),
+    hitKeys: [...hitKeys]
+  };
 }

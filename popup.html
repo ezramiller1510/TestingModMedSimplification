@@ -5,30 +5,44 @@
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      width: 320px;
+      width: 340px;
       padding: 12px;
       margin: 0;
       color: #222;
     }
     h3 {
-      margin: 0 0 10px 0;
+      margin: 0 0 8px 0;
       font-size: 15px;
       border-bottom: 1px solid #ddd;
       padding-bottom: 6px;
     }
-    .protocol-list {
+    .hint {
+      margin: 0 0 10px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.35;
+    }
+    .target-list {
       display: flex;
       flex-direction: column;
-      gap: 8px;
-      margin-bottom: 12px;
+      gap: 6px;
+      margin-bottom: 10px;
+      max-height: 160px;
+      overflow: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      padding: 8px;
+      background: #fafafa;
     }
-    label {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 13px;
-      cursor: pointer;
+    .target {
+      font-size: 12px;
+      line-height: 1.3;
     }
+    .target strong {
+      font-size: 12px;
+    }
+    .ok { color: #047857; }
+    .missing { color: #b45309; }
     .custom-input {
       width: 100%;
       box-sizing: border-box;
@@ -53,70 +67,53 @@
       font-weight: 600;
       cursor: pointer;
     }
-    button.secondary {
-      background-color: #445566;
-    }
-    button.tertiary {
-      background-color: #6b7280;
-    }
-    button:hover {
-      filter: brightness(0.92);
-    }
+    button.secondary { background-color: #445566; }
+    button.tertiary { background-color: #6b7280; }
+    button:hover { filter: brightness(0.92); }
     button:disabled {
       background-color: #99c2eb;
       cursor: not-allowed;
       filter: none;
     }
     button.secondary:disabled,
-    button.tertiary:disabled {
-      background-color: #9aa4ae;
-    }
+    button.tertiary:disabled { background-color: #9aa4ae; }
     #status {
       margin-top: 8px;
       font-size: 12px;
       color: #444;
       word-break: break-word;
       white-space: pre-wrap;
-      max-height: 260px;
+      max-height: 220px;
       overflow: auto;
-    }
-    .hint {
-      margin: 0 0 10px;
-      font-size: 11px;
-      color: #666;
-      line-height: 1.35;
     }
   </style>
 </head>
 <body>
-  <h3>ModMed Protocols</h3>
+  <h3>ModMed Protocol IDs</h3>
   <p class="hint">
-    Protocol apply often expands into special tests/orders — the protocol ID may not stay on the visit.
-    Use Test to probe endpoints + search captured network calls.
+    Collect <b>protocolId</b> (for Apply) + <b>diagnosis/procedure catalog IDs</b> (for Detect)
+    from Visit Overview + captured Protocols traffic.
   </p>
 
-  <div class="protocol-list">
-    <label>
-      <input type="checkbox" name="protocol" value="101074" data-name="Glaucoma Tests">
-      Test Protocol (101074)
-    </label>
-    <!-- Duplicate the <label> block above to add more saved protocols -->
-  </div>
+  <div id="targetList" class="target-list"></div>
 
   <input
     type="text"
-    id="customId"
+    id="manualProtocolId"
     class="custom-input"
-    placeholder="Or enter ID(s): e.g. 101075, 101076"
+    placeholder="Optional: set protocolId for selected target (id)"
   >
+  <select id="manualTarget" class="custom-input"></select>
 
   <div class="btn-row">
-    <button id="testBtn" class="secondary" type="button">Test if applied / find endpoint</button>
-    <button id="captureBtn" class="tertiary" type="button">Show captured API calls</button>
-    <button id="applyBtn" type="button">Apply Protocols</button>
+    <button id="collectBtn" class="secondary" type="button">Collect IDs from this visit</button>
+    <button id="checkBtn" class="secondary" type="button">Check if targets applied</button>
+    <button id="copyBtn" class="tertiary" type="button">Copy mappings JSON</button>
+    <button id="applyMappedBtn" type="button">Apply collected protocolIds</button>
   </div>
   <div id="status"></div>
 
+  <script src="targets.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
