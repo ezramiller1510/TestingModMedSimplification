@@ -5,7 +5,7 @@
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      width: 260px;
+      width: 280px;
       padding: 12px;
       margin: 0;
       color: #222;
@@ -38,6 +38,11 @@
       border-radius: 4px;
       font-size: 12px;
     }
+    .btn-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
     button {
       width: 100%;
       padding: 8px;
@@ -48,18 +53,26 @@
       font-weight: 600;
       cursor: pointer;
     }
+    button.secondary {
+      background-color: #445566;
+    }
     button:hover {
-      background-color: #0052a3;
+      filter: brightness(0.92);
     }
     button:disabled {
       background-color: #99c2eb;
       cursor: not-allowed;
+      filter: none;
+    }
+    button.secondary:disabled {
+      background-color: #9aa4ae;
     }
     #status {
       margin-top: 8px;
       font-size: 12px;
       color: #444;
       word-break: break-word;
+      white-space: pre-wrap;
     }
   </style>
 </head>
@@ -74,14 +87,17 @@
     <!-- Duplicate the <label> block above to add more saved protocols -->
   </div>
 
-  <input 
-    type="text" 
-    id="customId" 
-    class="custom-input" 
+  <input
+    type="text"
+    id="customId"
+    class="custom-input"
     placeholder="Or enter ID(s): e.g. 101075, 101076"
   >
 
-  <button id="applyBtn">Apply Protocols</button>
+  <div class="btn-row">
+    <button id="testBtn" class="secondary" type="button">Test if applied</button>
+    <button id="applyBtn" type="button">Apply Protocols</button>
+  </div>
   <div id="status"></div>
 
   <script src="popup.js"></script>
