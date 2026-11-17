@@ -1,11 +1,33 @@
-const BUTTON_IDS = ["addBtn", "collectBtn", "checkBtn", "copyBtn", "applyMappedBtn"];
+const MAIN_BUTTONS = ["abnApplyBtn", "refreshBtn", "reconfigureBtn"];
+const SETTINGS_BUTTONS = ["addBtn", "collectBtn", "copyBtn", "backBtn", "saveAbnSettingsBtn"];
 
-function setBusy(busy, statusText) {
-  BUTTON_IDS.forEach((id) => {
-    const el = document.getElementById(id);
+function $(id) {
+  return document.getElementById(id);
+}
+
+function setBusy(busy, statusText, which = "main") {
+  const ids = which === "settings" ? SETTINGS_BUTTONS : MAIN_BUTTONS;
+  ids.forEach((id) => {
+    const el = $(id);
     if (el) el.disabled = busy;
   });
-  if (statusText != null) document.getElementById("status").textContent = statusText;
+  // Also disable protocol checkboxes while busy
+  document.querySelectorAll('#protocolTable input[type="checkbox"]').forEach((cb) => {
+    cb.disabled = busy;
+  });
+  if (statusText != null) {
+    $(which === "settings" ? "settingsStatus" : "status").textContent = statusText;
+  }
+}
+
+function showMain() {
+  $("mainView").classList.remove("hidden");
+  $("settingsView").classList.add("hidden");
+}
+
+function showSettings() {
+  $("settingsView").classList.remove("hidden");
+  $("mainView").classList.add("hidden");
 }
 
 async function getActiveModMedTab() {
@@ -34,15 +56,26 @@ function sendToTab(action, payload = {}) {
 }
 
 async function loadState() {
-  const stored = await chrome.storage.local.get(["trackedProtocols", "protocolMappings"]);
+  const stored = await chrome.storage.local.get([
+    "trackedProtocols",
+    "protocolMappings",
+    "abnSettings",
+    "abnExtraText"
+  ]);
   return {
     tracked: Array.isArray(stored.trackedProtocols) ? stored.trackedProtocols : [],
-    mappings: stored.protocolMappings || {}
+    mappings: stored.protocolMappings || {},
+    abnSettings: stored.abnSettings || {
+      protocolId: null,
+      procedureCatalogId: null,
+      aliases: ["ABN", "ABN signed"]
+    },
+    abnExtraText: stored.abnExtraText || ""
   };
 }
 
-function renderTargets(tracked, mappings) {
-  const list = document.getElementById("targetList");
+function renderSettingsList(tracked, mappings) {
+  const list = $("targetList");
   list.innerHTML = "";
 
   if (!tracked.length) {
@@ -66,11 +99,7 @@ function renderTargets(tracked, mappings) {
       <span class="${protocolId ? "ok" : "missing"}">protocolId: ${protocolId || "missing"}</span><br>
       <span class="${procedureId ? "ok" : "missing"}">procedureCatalogId: ${procedureId || "missing"}</span>
       ${procLabel ? ` <span>(${procLabel})</span>` : ""}
-      ${
-        (target.aliases || []).length
-          ? `<br><span class="muted">aliases: ${target.aliases.join(", ")}</span>`
-          : ""
-      }
+      ${(target.aliases || []).length ? `<br><span class="muted">aliases: ${target.aliases.join(", ")}</span>` : ""}
     `;
     row.querySelector("strong").textContent = target.name;
     list.appendChild(row);
@@ -87,68 +116,173 @@ function renderTargets(tracked, mappings) {
         trackedProtocols: trackedNext,
         protocolMappings: mappingsNext
       });
-      await refreshUi(`Removed tracked test.`);
+      await refreshSettings("Removed tracked test.");
     });
   });
 }
 
-function formatCollectResult(response) {
-  if (!response?.success) return "Error: " + (response?.error || "Unknown error");
+function renderMainTable(results) {
+  const table = $("protocolTable");
+  table.innerHTML = "";
 
-  const lines = [
-    `Visit: ${response.visitId}`,
-    `Overview source: ${response.overviewSource}`,
-    `Captured calls: ${response.captureCount}`,
-    "",
-    "Tracked mappings:"
-  ];
+  if (!results.length) {
+    table.innerHTML = `<div class="empty">No tracked protocols yet. Open Reconfigure to add some.</div>`;
+    return;
+  }
 
-  (response.mappings || []).forEach((m) => {
-    lines.push(
-      `- ${m.name}: protocolId=${m.protocolId || "?"} procedureCatalogId=${m.procedureCatalogId || "?"} (${m.procedureName || m.procedureAlias || "—"})`
-    );
+  results.forEach((r) => {
+    const row = document.createElement("div");
+    row.className = "protocol-row";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = Boolean(r.applied);
+    checkbox.dataset.key = r.key;
+    checkbox.title = r.reason || "";
+
+    const name = document.createElement("div");
+    name.textContent = r.name;
+
+    const pill = document.createElement("span");
+    pill.className = `status-pill ${r.applied ? "on" : "off"}`;
+    pill.textContent = r.applied ? "Applied" : "Not applied";
+
+    row.appendChild(checkbox);
+    row.appendChild(name);
+    row.appendChild(pill);
+
+    checkbox.addEventListener("change", () => onProtocolToggle(r, checkbox, pill));
+    table.appendChild(row);
   });
-
-  if (response.note) lines.push("", response.note);
-  return lines.join("\n");
 }
 
-function formatCheckResult(response) {
-  if (!response?.success) return "Error: " + (response?.error || "Unknown error");
-
-  const lines = [`Visit: ${response.visitId}`, ""];
-  (response.results || []).forEach((r) => {
-    lines.push(`${r.applied ? "✓" : "·"} ${r.name}: ${r.reason}`);
-  });
-  lines.push("", `Applied: ${(response.applied || []).join(", ") || "none"}`);
-  lines.push(`Missing: ${(response.missing || []).join(", ") || "none"}`);
-  return lines.join("\n");
+function renderAbnIndicator(abn) {
+  const el = $("abnIndicator");
+  if (abn?.applied) {
+    el.className = "abn-indicator on";
+    el.textContent = "ABN applied";
+  } else {
+    el.className = "abn-indicator off";
+    el.textContent = "ABN not applied";
+  }
 }
 
-async function refreshUi(statusText) {
-  const { tracked, mappings } = await loadState();
-  renderTargets(tracked, mappings);
-  if (statusText != null) document.getElementById("status").textContent = statusText;
-}
+async function refreshMain(statusText) {
+  const state = await loadState();
+  $("abnText").value = state.abnExtraText || "";
 
-document.getElementById("addBtn").addEventListener("click", async () => {
+  if (!state.tracked.length) {
+    renderMainTable([]);
+    renderAbnIndicator({ applied: false });
+    if (statusText != null) $("status").textContent = statusText;
+    return;
+  }
+
+  setBusy(true, statusText || "Loading visit status...");
   try {
-    const name = document.getElementById("newName").value;
-    const protocolId = document.getElementById("newProtocolId").value;
-    const aliases = document.getElementById("newAliases").value;
-    const procedureCatalogId = document.getElementById("newProcedureId").value;
+    const response = await sendToTab("GET_MAIN_STATUS");
+    if (!response?.success) throw new Error(response?.error || "Failed to load status");
 
-    const item = createTrackedProtocol({ name, protocolId, aliases, procedureCatalogId });
-    const { tracked, mappings } = await loadState();
+    renderMainTable(response.results || []);
+    renderAbnIndicator(response.abn || { applied: false });
+    $("status").textContent =
+      statusText ||
+      `Visit ${response.visitId || "?"} · ${(response.applied || []).length}/${(response.results || []).length} applied`;
+  } catch (err) {
+    renderMainTable(
+      state.tracked.map((t) => ({
+        key: t.key,
+        name: t.name,
+        applied: false,
+        reason: err.message
+      }))
+    );
+    renderAbnIndicator({ applied: false });
+    $("status").textContent = err.message;
+  }
+  setBusy(false);
+}
 
-    // Replace existing same-name entry to avoid duplicates.
-    const filtered = tracked.filter(
+async function refreshSettings(statusText) {
+  const state = await loadState();
+  renderSettingsList(state.tracked, state.mappings);
+  $("abnProtocolId").value = state.abnSettings.protocolId || "";
+  $("abnProcedureId").value = state.abnSettings.procedureCatalogId || "";
+  $("abnAliases").value = (state.abnSettings.aliases || []).join(", ");
+  if (statusText != null) $("settingsStatus").textContent = statusText;
+}
+
+async function onProtocolToggle(item, checkbox, pill) {
+  const wantApplied = checkbox.checked;
+  setBusy(true, wantApplied ? `Applying ${item.name}...` : `Removing ${item.name}...`);
+
+  try {
+    const response = await sendToTab(wantApplied ? "APPLY_TRACKED" : "UNAPPLY_TRACKED", {
+      key: item.key,
+      reload: true
+    });
+    if (!response?.success) throw new Error(response?.error || "Request failed");
+
+    pill.className = `status-pill ${wantApplied ? "on" : "off"}`;
+    pill.textContent = wantApplied ? "Applied" : "Not applied";
+    $("status").textContent = wantApplied
+      ? `Applied ${item.name}. Reloading page...`
+      : `Removed ${item.name}. Reloading page...`;
+  } catch (err) {
+    checkbox.checked = !wantApplied;
+    $("status").textContent = err.message;
+    setBusy(false);
+  }
+}
+
+$("refreshBtn").addEventListener("click", () => refreshMain("Refreshing..."));
+$("reconfigureBtn").addEventListener("click", async () => {
+  showSettings();
+  await refreshSettings("");
+});
+$("backBtn").addEventListener("click", async () => {
+  showMain();
+  await refreshMain("");
+});
+
+$("abnText").addEventListener("change", async () => {
+  await chrome.storage.local.set({ abnExtraText: $("abnText").value });
+});
+$("abnText").addEventListener("blur", async () => {
+  await chrome.storage.local.set({ abnExtraText: $("abnText").value });
+});
+
+$("abnApplyBtn").addEventListener("click", async () => {
+  await chrome.storage.local.set({ abnExtraText: $("abnText").value });
+  setBusy(true, "Applying ABN signed...");
+  try {
+    const response = await sendToTab("APPLY_ABN", {
+      extraText: $("abnText").value,
+      reload: true
+    });
+    if (!response?.success) throw new Error(response?.error || "ABN apply failed");
+    renderAbnIndicator({ applied: true });
+    $("status").textContent = "ABN signed applied. Reloading page...";
+  } catch (err) {
+    setBusy(false, err.message);
+  }
+});
+
+$("addBtn").addEventListener("click", async () => {
+  try {
+    const item = createTrackedProtocol({
+      name: $("newName").value,
+      protocolId: $("newProtocolId").value,
+      aliases: $("newAliases").value,
+      procedureCatalogId: $("newProcedureId").value
+    });
+    const state = await loadState();
+    const filtered = state.tracked.filter(
       (t) => normalizeLabel(t.name) !== normalizeLabel(item.name)
     );
     filtered.push(item);
 
-    const mappingsNext = { ...mappings };
-    // Drop old same-name keys
+    const mappingsNext = { ...state.mappings };
     Object.keys(mappingsNext).forEach((key) => {
       if (normalizeLabel(mappingsNext[key]?.name) === normalizeLabel(item.name)) {
         delete mappingsNext[key];
@@ -161,94 +295,72 @@ document.getElementById("addBtn").addEventListener("click", async () => {
       protocolMappings: mappingsNext
     });
 
-    document.getElementById("newName").value = "";
-    document.getElementById("newProtocolId").value = "";
-    document.getElementById("newAliases").value = "";
-    document.getElementById("newProcedureId").value = "";
-
-    await refreshUi(`Tracking “${item.name}”.`);
+    $("newName").value = "";
+    $("newProtocolId").value = "";
+    $("newAliases").value = "";
+    $("newProcedureId").value = "";
+    await refreshSettings(`Tracking “${item.name}”.`);
   } catch (err) {
-    document.getElementById("status").textContent = err.message;
+    $("settingsStatus").textContent = err.message;
   }
 });
 
-document.getElementById("collectBtn").addEventListener("click", async () => {
-  setBusy(true, "Collecting procedure IDs for your tracked tests...");
+$("saveAbnSettingsBtn").addEventListener("click", async () => {
+  const aliasesRaw = $("abnAliases").value.trim();
+  const abnSettings = {
+    protocolId: $("abnProtocolId").value.trim() || null,
+    procedureCatalogId: $("abnProcedureId").value.trim() || null,
+    aliases: aliasesRaw ? parseAliases(aliasesRaw) : ["ABN", "ABN signed"]
+  };
+  await chrome.storage.local.set({ abnSettings });
+  $("settingsStatus").textContent = "Saved ABN settings.";
+});
+
+$("collectBtn").addEventListener("click", async () => {
+  setBusy(true, "Collecting procedure IDs...", "settings");
   try {
     const response = await sendToTab("COLLECT_PROTOCOL_IDS");
-    await refreshUi(formatCollectResult(response));
+    if (!response?.success) throw new Error(response?.error || "Collect failed");
+    const lines = (response.mappings || []).map(
+      (m) =>
+        `- ${m.name}: protocolId=${m.protocolId || "?"} procedureCatalogId=${m.procedureCatalogId || "?"}`
+    );
+    await refreshSettings(
+      [`Visit: ${response.visitId}`, "", ...lines, response.note ? `\n${response.note}` : ""]
+        .filter(Boolean)
+        .join("\n")
+    );
   } catch (err) {
-    setBusy(false, err.message);
+    setBusy(false, err.message, "settings");
     return;
   }
-  setBusy(false);
+  setBusy(false, null, "settings");
 });
 
-document.getElementById("checkBtn").addEventListener("click", async () => {
-  setBusy(true, "Checking visit for tracked procedure IDs...");
-  try {
-    const response = await sendToTab("CHECK_TARGETS_APPLIED");
-    await refreshUi(formatCheckResult(response));
-  } catch (err) {
-    setBusy(false, err.message);
-    return;
-  }
-  setBusy(false);
-});
-
-document.getElementById("copyBtn").addEventListener("click", async () => {
-  const { tracked, mappings } = await loadState();
-  const payload = tracked.map((t) => {
-    const m = mappings[t.key] || emptyMapping(t);
-    return {
-      key: t.key,
-      name: t.name,
-      aliases: t.aliases || [],
-      protocolId: t.protocolId || m.protocolId || null,
-      procedureCatalogId: m.procedureCatalogId || t.procedureCatalogId || null,
-      procedureName: m.procedureName || null,
-      procedureAlias: m.procedureAlias || null
-    };
-  });
+$("copyBtn").addEventListener("click", async () => {
+  const state = await loadState();
+  const payload = {
+    tracked: state.tracked.map((t) => {
+      const m = state.mappings[t.key] || emptyMapping(t);
+      return {
+        key: t.key,
+        name: t.name,
+        aliases: t.aliases || [],
+        protocolId: t.protocolId || m.protocolId || null,
+        procedureCatalogId: m.procedureCatalogId || t.procedureCatalogId || null,
+        procedureName: m.procedureName || null
+      };
+    }),
+    abnSettings: state.abnSettings,
+    abnExtraText: state.abnExtraText
+  };
   const text = JSON.stringify(payload, null, 2);
   try {
     await navigator.clipboard.writeText(text);
-    document.getElementById("status").textContent = "Copied tracked JSON to clipboard.";
+    $("settingsStatus").textContent = "Copied tracked JSON to clipboard.";
   } catch {
-    document.getElementById("status").textContent = text;
+    $("settingsStatus").textContent = text;
   }
 });
 
-document.getElementById("applyMappedBtn").addEventListener("click", async () => {
-  const { tracked, mappings } = await loadState();
-  const uniqueIds = [
-    ...new Set(
-      tracked
-        .map((t) => t.protocolId || mappings[t.key]?.protocolId)
-        .filter(Boolean)
-        .map(String)
-    )
-  ];
-
-  if (!uniqueIds.length) {
-    document.getElementById("status").textContent =
-      "No protocolIds on tracked tests yet. Add protocol IDs above first.";
-    return;
-  }
-
-  setBusy(true, `Applying protocolIds: ${uniqueIds.join(", ")}...`);
-
-  try {
-    const response = await sendToTab("APPLY_PROTOCOLS", { protocolIds: uniqueIds });
-    if (response?.success) {
-      setBusy(false, "Applied! Reloading page...");
-      setTimeout(() => window.close(), 600);
-    } else {
-      setBusy(false, "Error: " + (response?.error || "Unknown error"));
-    }
-  } catch (err) {
-    setBusy(false, err.message);
-  }
-});
-
-refreshUi("");
+refreshMain("");

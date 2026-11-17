@@ -46,8 +46,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "APPLY_PROTOCOLS") {
-    applyProtocolsToVisit(message.protocolIds || [])
+    applyProtocolsToVisit(message.protocolIds || [], { reload: message.reload !== false })
       .then(() => sendResponse({ success: true }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "APPLY_TRACKED") {
+    applyTrackedByKey(message.key, { reload: message.reload !== false })
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "UNAPPLY_TRACKED") {
+    unapplyTrackedByKey(message.key, { reload: message.reload !== false })
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "GET_MAIN_STATUS") {
+    getMainStatus()
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "APPLY_ABN") {
+    applyAbnSigned(message.extraText || "", { reload: message.reload !== false })
+      .then((result) => sendResponse({ success: true, ...result }))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
@@ -277,7 +305,7 @@ async function discoverWhereIdsAppear(requestedIds) {
   };
 }
 
-async function applyProtocolsToVisit(protocolIds) {
+async function applyProtocolsToVisit(protocolIds, { reload = true } = {}) {
   const visitId = getActiveVisitId();
   if (!visitId) {
     throw new Error("Could not detect Visit ID. Try clicking into the visit note or refreshing the page.");
@@ -301,7 +329,227 @@ async function applyProtocolsToVisit(protocolIds) {
 
   if (!res.ok) throw new Error(`ModMed API returned ${res.status}`);
 
-  window.location.reload();
+  if (reload) window.location.reload();
+  return { visitId, protocolIds: ids };
+}
+
+async function fetchDelete(url) {
+  const res = await fetch(url, {
+    method: "DELETE",
+    headers: authHeaders(),
+    credentials: "include"
+  });
+  return { ok: res.ok, status: res.status, url };
+}
+
+async function deleteVisitProcedure(visitId, procedure) {
+  const visitProcedureId = procedure.visitProcedureId;
+  const diagnosisId = procedure.visitDiagnosisId;
+  if (!visitProcedureId) {
+    throw new Error("Missing visit procedure id for delete.");
+  }
+
+  const candidates = [
+    `https://rep.modmedapp.com/ema/ws/v3/visits/${visitId}/diagnoses/${diagnosisId}/procedures/${visitProcedureId}`,
+    `https://rep.modmedapp.com/ema/ws/v3/visitDiagnosisProcedures/${visitProcedureId}`,
+    `https://rep.modmedapp.com/ema/ws/v3/procedures/${visitProcedureId}`,
+    `https://rep.modmedapp.com/ema/ws/v3/visits/${visitId}/procedures/${visitProcedureId}`
+  ].filter((u) => !u.includes("/diagnoses/undefined/") && !u.includes("/diagnoses/null/"));
+
+  let last = null;
+  for (const url of candidates) {
+    last = await fetchDelete(url);
+    if (last.ok) return last;
+  }
+  throw new Error(
+    `Could not unapply procedure ${visitProcedureId}. Last status: ${last?.status || "n/a"}. Capture the DELETE URL from DevTools if ModMed uses a different path.`
+  );
+}
+
+function listOverviewProceduresDetailed(overview) {
+  const out = [];
+  for (const dx of overview.diagnoses || []) {
+    const dxName = dx.diagnosisName || dx.diagnosisNameWithRO || dx.diagnosis?.diagnosisName || "";
+    for (const p of dx.procedures || []) {
+      out.push({
+        name: p.procedure || p.veProcedure?.name || "",
+        alias: p.veProcedure?.procedureAlias || "",
+        catalogId: p.veProcedure?.id != null ? String(p.veProcedure.id) : null,
+        visitProcedureId: p.id != null ? String(p.id) : null,
+        visitDiagnosisId: dx.id != null ? String(dx.id) : null,
+        diagnosisName: dxName || null,
+        diagnosisCatalogId: dx.diagnosis?.id != null ? String(dx.diagnosis.id) : null,
+        deletable: p.veVisitDiagnosisProcedureStatusDto?.procedureDeletable !== false
+      });
+    }
+  }
+  return out.filter((p) => p.catalogId && p.visitProcedureId);
+}
+
+async function getTrackedByKey(key) {
+  const targets = await getTrackedTargets();
+  const target = targets.find((t) => t.key === key);
+  if (!target) throw new Error("Tracked protocol not found.");
+  return target;
+}
+
+async function applyTrackedByKey(key, { reload = true } = {}) {
+  const target = await getTrackedByKey(key);
+  if (!target.protocolId) {
+    throw new Error(`No protocolId configured for “${target.name}”. Add it in Reconfigure.`);
+  }
+  return applyProtocolsToVisit([target.protocolId], { reload });
+}
+
+async function unapplyTrackedByKey(key, { reload = true } = {}) {
+  const visitId = getActiveVisitId();
+  if (!visitId) throw new Error("Could not detect Visit ID.");
+
+  const target = await getTrackedByKey(key);
+  const overview = await loadVisitOverview(visitId);
+  const procedures = listOverviewProceduresDetailed(overview.data);
+
+  const wantedIds = new Set(
+    []
+      .concat(target.procedureCatalogId ? [String(target.procedureCatalogId)] : [])
+      .concat(target.procedureCatalogIds || [])
+      .map(String)
+  );
+
+  let matches = procedures.filter((p) => wantedIds.has(String(p.catalogId)));
+  if (!matches.length) {
+    matches = procedures.filter(
+      (p) => targetMatchesText(target, p.name) || targetMatchesText(target, p.alias)
+    );
+  }
+
+  if (!matches.length) {
+    throw new Error(`“${target.name}” does not appear applied on this visit.`);
+  }
+
+  const deleted = [];
+  for (const match of matches) {
+    const result = await deleteVisitProcedure(visitId, match);
+    deleted.push({ ...match, deleteStatus: result.status, deleteUrl: result.url });
+  }
+
+  if (reload) window.location.reload();
+  return { visitId, deleted };
+}
+
+function getAbnTargetFromSettings(abnSettings) {
+  return {
+    key: "abn-signed",
+    name: "ABN signed",
+    aliases: parseAliases(abnSettings?.aliases?.length ? abnSettings.aliases : ["ABN", "ABN signed"]),
+    protocolId: abnSettings?.protocolId || null,
+    procedureCatalogId: abnSettings?.procedureCatalogId || null,
+    procedureCatalogIds: abnSettings?.procedureCatalogId
+      ? [String(abnSettings.procedureCatalogId)]
+      : []
+  };
+}
+
+function detectAbnFromOverview(overview, abnTarget) {
+  const procedures = listOverviewProcedures(overview);
+  if (abnTarget.procedureCatalogId) {
+    const byId = procedures.find((p) => String(p.catalogId) === String(abnTarget.procedureCatalogId));
+    if (byId) {
+      return {
+        applied: true,
+        reason: `procedure catalog ${byId.catalogId}`,
+        procedure: byId
+      };
+    }
+  }
+
+  const byName = procedures.find(
+    (p) => targetMatchesText(abnTarget, p.name) || targetMatchesText(abnTarget, p.alias)
+  );
+  if (byName) {
+    return {
+      applied: true,
+      reason: `procedure ${byName.catalogId} (${byName.name || byName.alias})`,
+      procedure: byName
+    };
+  }
+
+  // Also scan diagnosis names / free text blobs lightly
+  const blob = JSON.stringify(overview);
+  if (/\bABN\b/i.test(blob) && /signed/i.test(blob)) {
+    return { applied: true, reason: "ABN signed text found in overview payload", procedure: null };
+  }
+
+  return { applied: false, reason: "ABN not found on visit overview", procedure: null };
+}
+
+async function applyAbnSigned(extraText, { reload = true } = {}) {
+  const stored = await chrome.storage.local.get(["abnSettings", "abnExtraText"]);
+  const abnSettings = stored.abnSettings || {};
+  const text = (extraText != null ? extraText : stored.abnExtraText) || "";
+  await chrome.storage.local.set({ abnExtraText: text });
+
+  if (!abnSettings.protocolId) {
+    throw new Error("Set an ABN protocol ID in Reconfigure before applying ABN signed.");
+  }
+
+  // Apply the ABN protocol first.
+  await applyProtocolsToVisit([abnSettings.protocolId], { reload: false });
+
+  // Best-effort: if extra text is present, try attaching it as a diagnosis comment /
+  // note on matching ABN procedure after apply. This may no-op depending on EMA shape.
+  if (text.trim()) {
+    try {
+      const visitId = getActiveVisitId();
+      const overview = await loadVisitOverview(visitId, { forceProbe: true });
+      const abnTarget = getAbnTargetFromSettings(abnSettings);
+      const detected = detectAbnFromOverview(overview.data, abnTarget);
+      const visitProcedureId = detected.procedure?.visitProcedureId;
+      if (visitProcedureId) {
+        const noteUrls = [
+          `https://rep.modmedapp.com/ema/ws/v3/visitDiagnosisProcedures/${visitProcedureId}`,
+          `https://rep.modmedapp.com/ema/ws/v3/procedures/${visitProcedureId}`
+        ];
+        for (const url of noteUrls) {
+          const res = await fetch(url, {
+            method: "PUT",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            credentials: "include",
+            body: JSON.stringify({
+              clinicalNotesToTheLab: text,
+              comment: text,
+              notes: text
+            })
+          });
+          if (res.ok) break;
+        }
+      }
+    } catch (err) {
+      console.log("ABN extra text attach skipped:", err.message);
+    }
+  }
+
+  if (reload) window.location.reload();
+  return { applied: true, protocolId: abnSettings.protocolId, extraText: text };
+}
+
+async function getMainStatus() {
+  const targetStatus = await checkTargetsApplied();
+  const stored = await chrome.storage.local.get(["abnSettings"]);
+  const abnTarget = getAbnTargetFromSettings(stored.abnSettings || {});
+
+  let abn = { applied: false, reason: "Could not load overview for ABN" };
+  try {
+    const overview = await loadVisitOverview(targetStatus.visitId);
+    abn = detectAbnFromOverview(overview.data, abnTarget);
+  } catch (err) {
+    abn = { applied: false, reason: err.message };
+  }
+
+  return {
+    ...targetStatus,
+    abn
+  };
 }
 
 function parseJsonSafe(text) {
@@ -323,16 +571,18 @@ function buildOverviewUrls(visitId) {
   ];
 }
 
-async function loadVisitOverview(visitId) {
+async function loadVisitOverview(visitId, { forceProbe = false } = {}) {
   // Prefer a captured overview body (has impressionsPlansDto) if present.
-  for (const entry of readCaptureLog().slice().reverse()) {
-    if (!entry.body || !/impressionsPlansDto|unworthyDiagnoses|"diagnoses"\s*:/.test(entry.body)) {
-      continue;
-    }
-    if (!String(entry.url || "").includes(String(visitId))) continue;
-    const parsed = parseJsonSafe(entry.body);
-    if (parsed && (parsed.diagnoses || parsed.visit || parsed.impressionsPlansDto)) {
-      return { data: parsed, url: entry.url, source: "capture" };
+  if (!forceProbe) {
+    for (const entry of readCaptureLog().slice().reverse()) {
+      if (!entry.body || !/impressionsPlansDto|unworthyDiagnoses|"diagnoses"\s*:/.test(entry.body)) {
+        continue;
+      }
+      if (!String(entry.url || "").includes(String(visitId))) continue;
+      const parsed = parseJsonSafe(entry.body);
+      if (parsed && (parsed.diagnoses || parsed.visit || parsed.impressionsPlansDto)) {
+        return { data: parsed, url: entry.url, source: "capture" };
+      }
     }
   }
 
