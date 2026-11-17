@@ -437,6 +437,7 @@ async function unapplyTrackedByKey(key, { reload = true } = {}) {
   const target = await getTrackedByKey(key);
   const overview = await loadVisitOverview(visitId, { forceProbe: true });
   const procedures = listOverviewProceduresDetailed(overview.data);
+  console.log(overview)
   const matches = findMatchingOverviewProcedures(target, procedures);
 
   if (!matches.length) {
