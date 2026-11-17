@@ -15,21 +15,93 @@ function slugifyKey(name) {
   return `${base}-${Date.now().toString(36)}`;
 }
 
+// Canonicalize common ophthalmology wording so "OCT Mac/Retina" can match
+// ModMed names like "OCT, Retina" / "OCT Macula".
+function canonicalizeToken(token) {
+  const t = String(token || "").toLowerCase();
+  if (!t) return "";
+  if (["mac", "macula", "macular"].includes(t)) return "macula";
+  if (["retina", "retinal", "retin"].includes(t)) return "retina";
+  if (["optic", "onh"].includes(t)) return "optic";
+  if (["nerve", "rnfl"].includes(t)) return "nerve";
+  if (["anterior", "as"].includes(t)) return "anterior";
+  if (["segment", "seg"].includes(t)) return "segment";
+  if (["field", "fields", "vf", "hvf"].includes(t)) return "field";
+  if (["visual"].includes(t)) return "visual";
+  if (["cct", "pachymetry", "pach"].includes(t)) return "cct";
+  if (["optos", "optomap"].includes(t)) return "optos";
+  if (["oct"].includes(t)) return "oct";
+  return t;
+}
+
+function labelTokens(value) {
+  return normalizeLabel(value)
+    .split(/\s+/)
+    .map(canonicalizeToken)
+    .filter((t) => t && t.length >= 2);
+}
+
+function uniqueTokens(tokens) {
+  return [...new Set(tokens)];
+}
+
+function tokensOverlap(aTokens, bTokens) {
+  const a = uniqueTokens(aTokens);
+  const b = uniqueTokens(bTokens);
+  if (!a.length || !b.length) return false;
+
+  const bSet = new Set(b);
+  const aSet = new Set(a);
+  const shared = a.filter((t) => bSet.has(t));
+
+  // Exact / containment-style token match:
+  // all tokens of the shorter label appear in the longer one.
+  const [shorter, longerSet] =
+    a.length <= b.length ? [a, bSet] : [b, aSet];
+  if (shorter.every((t) => longerSet.has(t))) return true;
+
+  // Strong partial overlap (handles OCT Mac/Retina vs OCT Retina).
+  if (shared.length >= 2) return true;
+
+  // Anterior Segment vs AS-OCT / Anterior OCT
+  if (
+    shared.includes("anterior") &&
+    (a.includes("segment") || b.includes("segment") || a.includes("oct") || b.includes("oct"))
+  ) {
+    return true;
+  }
+
+  // Single strong technical token match only when both sides are short
+  // (e.g. "optos" vs "optos imaging"), not broad words alone.
+  if (shared.length === 1 && shorter.length === 1) {
+    const only = shared[0];
+    if (["oct", "optos", "cct", "field"].includes(only)) return true;
+  }
+
+  return false;
+}
+
+function labelsLooselyMatch(a, b) {
+  const left = normalizeLabel(a);
+  const right = normalizeLabel(b);
+  if (!left || !right) return false;
+  if (left === right || left.includes(right) || right.includes(left)) return true;
+  return tokensOverlap(labelTokens(left), labelTokens(right));
+}
+
 function targetMatchNeedles(target) {
   return [target.name]
     .concat(target.aliases || [])
     .concat(target.procedureName ? [target.procedureName] : [])
     .concat(target.procedureAlias ? [target.procedureAlias] : [])
-    .map(normalizeLabel)
+    .map((v) => String(v || "").trim())
     .filter(Boolean);
 }
 
 function targetMatchesText(target, text) {
-  const hay = normalizeLabel(text);
+  const hay = String(text || "").trim();
   if (!hay) return false;
-  return targetMatchNeedles(target).some(
-    (n) => n && (hay === n || hay.includes(n) || n.includes(hay))
-  );
+  return targetMatchNeedles(target).some((n) => labelsLooselyMatch(n, hay));
 }
 
 function emptyMapping(target) {

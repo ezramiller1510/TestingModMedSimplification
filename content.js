@@ -410,6 +410,26 @@ async function applyTrackedByKey(key, { reload = true } = {}) {
   return applyProtocolsToVisit([target.protocolId], { reload });
 }
 
+function findMatchingOverviewProcedures(target, procedures) {
+  const wantedIds = new Set(
+    []
+      .concat(target.procedureCatalogId ? [String(target.procedureCatalogId)] : [])
+      .concat(target.procedureCatalogIds || [])
+      .map(String)
+      .filter(Boolean)
+  );
+
+  let matches = procedures.filter((p) => p.catalogId && wantedIds.has(String(p.catalogId)));
+  if (matches.length) return matches;
+
+  return procedures.filter(
+    (p) =>
+      targetMatchesText(target, p.name) ||
+      targetMatchesText(target, p.alias) ||
+      targetMatchesText(target, p.diagnosisName)
+  );
+}
+
 async function unapplyTrackedByKey(key, { reload = true } = {}) {
   const visitId = getActiveVisitId();
   if (!visitId) throw new Error("Could not detect Visit ID.");
@@ -417,26 +437,19 @@ async function unapplyTrackedByKey(key, { reload = true } = {}) {
   const target = await getTrackedByKey(key);
   const overview = await loadVisitOverview(visitId, { forceProbe: true });
   const procedures = listOverviewProceduresDetailed(overview.data);
+  const matches = findMatchingOverviewProcedures(target, procedures);
 
-  const wantedIds = new Set(
-    []
-      .concat(target.procedureCatalogId ? [String(target.procedureCatalogId)] : [])
-      .concat(target.procedureCatalogIds || [])
-      .map(String)
-  );
-
-  let matches = procedures.filter((p) => wantedIds.has(String(p.catalogId)));
   if (!matches.length) {
-    matches = procedures.filter(
-      (p) =>
-        targetMatchesText(target, p.name) ||
-        targetMatchesText(target, p.alias) ||
-        targetMatchesText(target, p.diagnosisName)
+    const available = procedures
+      .map((p) => p.name || p.alias || p.diagnosisName)
+      .filter(Boolean)
+      .slice(0, 12);
+    throw new Error(
+      `“${target.name}” does not appear applied on this visit.` +
+        (available.length
+          ? ` Procedures seen: ${available.join("; ")}. Add one of those as an alias or Collect procedure IDs.`
+          : " No procedures were found in visit overview.")
     );
-  }
-
-  if (!matches.length) {
-    throw new Error(`“${target.name}” does not appear applied on this visit.`);
   }
 
   // ModMed removes applied protocol content via visitDiagnosis DELETE.
@@ -863,7 +876,7 @@ async function collectProtocolIdsForTargets() {
     );
   }
 
-  // Keep trackedProtocols.protocolId in sync when capture finds/updates it.
+  // Keep trackedProtocols in sync when collect finds apply/detect IDs.
   for (let i = 0; i < tracked.length; i++) {
     const m = mappings[tracked[i].key];
     if (!m) continue;
@@ -871,6 +884,12 @@ async function collectProtocolIdsForTargets() {
     if (m.procedureCatalogId) tracked[i].procedureCatalogId = m.procedureCatalogId;
     if (m.procedureName) tracked[i].procedureName = m.procedureName;
     if (m.procedureAlias) tracked[i].procedureAlias = m.procedureAlias;
+
+    // Persist ModMed's real procedure wording as aliases for future matches.
+    const aliasSet = new Set(parseAliases(tracked[i].aliases));
+    if (m.procedureName) aliasSet.add(m.procedureName);
+    if (m.procedureAlias) aliasSet.add(m.procedureAlias);
+    tracked[i].aliases = [...aliasSet];
   }
 
   await chrome.storage.local.set({ protocolMappings: mappings, trackedProtocols: tracked });
