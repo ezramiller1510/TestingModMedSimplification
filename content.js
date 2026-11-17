@@ -342,48 +342,57 @@ async function fetchDelete(url) {
   return { ok: res.ok, status: res.status, url };
 }
 
-async function deleteVisitProcedure(visitId, procedure) {
-  const visitProcedureId = procedure.visitProcedureId;
-  const diagnosisId = procedure.visitDiagnosisId;
-  if (!visitProcedureId) {
-    throw new Error("Missing visit procedure id for delete.");
-  }
+async function deleteVisitDiagnosis(visitDiagnosisId) {
+  const id = String(visitDiagnosisId || "").trim();
+  if (!id) throw new Error("Missing visitDiagnosis id for delete.");
 
-  const candidates = [
-    `https://rep.modmedapp.com/ema/ws/v3/visits/${visitId}/diagnoses/${diagnosisId}/procedures/${visitProcedureId}`,
-    `https://rep.modmedapp.com/ema/ws/v3/visitDiagnosisProcedures/${visitProcedureId}`,
-    `https://rep.modmedapp.com/ema/ws/v3/procedures/${visitProcedureId}`,
-    `https://rep.modmedapp.com/ema/ws/v3/visits/${visitId}/procedures/${visitProcedureId}`
-  ].filter((u) => !u.includes("/diagnoses/undefined/") && !u.includes("/diagnoses/null/"));
-
-  let last = null;
-  for (const url of candidates) {
-    last = await fetchDelete(url);
-    if (last.ok) return last;
+  const url = `https://rep.modmedapp.com/ema/ws/v3/visitDiagnosis/${id}?orderVersion=0`;
+  const result = await fetchDelete(url);
+  if (!result.ok) {
+    throw new Error(`Could not delete visitDiagnosis ${id}. Status: ${result.status}`);
   }
-  throw new Error(
-    `Could not unapply procedure ${visitProcedureId}. Last status: ${last?.status || "n/a"}. Capture the DELETE URL from DevTools if ModMed uses a different path.`
-  );
+  return result;
 }
 
 function listOverviewProceduresDetailed(overview) {
   const out = [];
-  for (const dx of overview.diagnoses || []) {
+  const diagnoses = [].concat(overview.diagnoses || []).concat(overview.unworthyDiagnoses || []);
+
+  for (const dx of diagnoses) {
     const dxName = dx.diagnosisName || dx.diagnosisNameWithRO || dx.diagnosis?.diagnosisName || "";
-    for (const p of dx.procedures || []) {
+    const visitDiagnosisId = dx.id != null ? String(dx.id) : null;
+    const procedures = dx.procedures || [];
+
+    if (!procedures.length && visitDiagnosisId) {
+      // Diagnosis-only row (e.g. unworthyDiagnoses) — still removable via visitDiagnosis DELETE.
+      out.push({
+        name: dxName || "",
+        alias: "",
+        catalogId: dx.diagnosis?.id != null ? String(dx.diagnosis.id) : null,
+        visitProcedureId: null,
+        visitDiagnosisId,
+        diagnosisName: dxName || null,
+        diagnosisCatalogId: dx.diagnosis?.id != null ? String(dx.diagnosis.id) : null,
+        deletable: true
+      });
+      continue;
+    }
+
+    for (const p of procedures) {
       out.push({
         name: p.procedure || p.veProcedure?.name || "",
         alias: p.veProcedure?.procedureAlias || "",
         catalogId: p.veProcedure?.id != null ? String(p.veProcedure.id) : null,
         visitProcedureId: p.id != null ? String(p.id) : null,
-        visitDiagnosisId: dx.id != null ? String(dx.id) : null,
+        visitDiagnosisId,
         diagnosisName: dxName || null,
         diagnosisCatalogId: dx.diagnosis?.id != null ? String(dx.diagnosis.id) : null,
         deletable: p.veVisitDiagnosisProcedureStatusDto?.procedureDeletable !== false
       });
     }
   }
-  return out.filter((p) => p.catalogId && p.visitProcedureId);
+
+  return out.filter((p) => p.visitDiagnosisId);
 }
 
 async function getTrackedByKey(key) {
@@ -396,7 +405,7 @@ async function getTrackedByKey(key) {
 async function applyTrackedByKey(key, { reload = true } = {}) {
   const target = await getTrackedByKey(key);
   if (!target.protocolId) {
-    throw new Error(`No protocolId configured for “${target.name}”. Add it in Reconfigure.`);
+    throw new Error(`No protocolId configured for “${target.name}”. Add it in Settings.`);
   }
   return applyProtocolsToVisit([target.protocolId], { reload });
 }
@@ -406,7 +415,7 @@ async function unapplyTrackedByKey(key, { reload = true } = {}) {
   if (!visitId) throw new Error("Could not detect Visit ID.");
 
   const target = await getTrackedByKey(key);
-  const overview = await loadVisitOverview(visitId);
+  const overview = await loadVisitOverview(visitId, { forceProbe: true });
   const procedures = listOverviewProceduresDetailed(overview.data);
 
   const wantedIds = new Set(
@@ -419,7 +428,10 @@ async function unapplyTrackedByKey(key, { reload = true } = {}) {
   let matches = procedures.filter((p) => wantedIds.has(String(p.catalogId)));
   if (!matches.length) {
     matches = procedures.filter(
-      (p) => targetMatchesText(target, p.name) || targetMatchesText(target, p.alias)
+      (p) =>
+        targetMatchesText(target, p.name) ||
+        targetMatchesText(target, p.alias) ||
+        targetMatchesText(target, p.diagnosisName)
     );
   }
 
@@ -427,10 +439,12 @@ async function unapplyTrackedByKey(key, { reload = true } = {}) {
     throw new Error(`“${target.name}” does not appear applied on this visit.`);
   }
 
+  // ModMed removes applied protocol content via visitDiagnosis DELETE.
+  const diagnosisIds = [...new Set(matches.map((m) => String(m.visitDiagnosisId)).filter(Boolean))];
   const deleted = [];
-  for (const match of matches) {
-    const result = await deleteVisitProcedure(visitId, match);
-    deleted.push({ ...match, deleteStatus: result.status, deleteUrl: result.url });
+  for (const visitDiagnosisId of diagnosisIds) {
+    const result = await deleteVisitDiagnosis(visitDiagnosisId);
+    deleted.push({ visitDiagnosisId, deleteStatus: result.status, deleteUrl: result.url });
   }
 
   if (reload) window.location.reload();
