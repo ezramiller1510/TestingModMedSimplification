@@ -224,7 +224,8 @@
 
   <div id="settingsTab" class="hidden">
     <p class="hint">
-      Add protocols to track. Detect uses procedure catalog ID; Apply uses protocolId.
+      Add protocols to track. Apply uses protocolId. Detect/Remove use procedure catalog ID
+      <b>and</b> diagnosis catalog ID (tests can share names like “All Tests”).
     </p>
 
     <div class="add-box">
@@ -232,6 +233,7 @@
       <div class="row"><input id="newProtocolId" class="custom-input" placeholder="Protocol ID (apply)" /></div>
       <div class="row"><input id="newAliases" class="custom-input" placeholder="Optional aliases (comma-separated)" /></div>
       <div class="row"><input id="newProcedureId" class="custom-input" placeholder="Optional procedure catalog ID (detect)" /></div>
+      <div class="row"><input id="newDiagnosisId" class="custom-input" placeholder="Optional diagnosis catalog ID (detect/delete)" /></div>
       <button id="addBtn" class="action secondary" type="button">Add to tracked tests</button>
     </div>
 
