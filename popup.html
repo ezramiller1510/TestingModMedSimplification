@@ -5,103 +5,100 @@
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      width: 380px;
+      width: 360px;
       padding: 12px;
       margin: 0;
       color: #222;
     }
     h3 {
-      margin: 0 0 8px 0;
+      margin: 0 0 10px 0;
       font-size: 15px;
+    }
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 12px;
       border-bottom: 1px solid #ddd;
-      padding-bottom: 6px;
     }
-    h4 {
-      margin: 0 0 8px;
+    .tab {
+      flex: 1;
+      padding: 8px;
+      border: none;
+      background: transparent;
+      border-bottom: 2px solid transparent;
+      font-weight: 600;
       font-size: 13px;
+      color: #666;
+      cursor: pointer;
     }
+    .tab.active {
+      color: #0066cc;
+      border-bottom-color: #0066cc;
+    }
+    .hidden { display: none !important; }
     .hint {
       margin: 0 0 10px;
       font-size: 11px;
       color: #666;
       line-height: 1.35;
     }
-    .hidden { display: none !important; }
-    .main-layout {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
-      align-items: start;
-    }
-    .protocol-table {
+    .protocol-list {
       border: 1px solid #e5e7eb;
       border-radius: 4px;
-      overflow: hidden;
+      max-height: 260px;
+      overflow: auto;
+      margin-bottom: 10px;
       background: #fff;
     }
     .protocol-row {
-      display: grid;
-      grid-template-columns: 18px 1fr auto;
-      gap: 8px;
-      align-items: center;
-      padding: 8px 10px;
+      padding: 10px;
       border-bottom: 1px solid #f0f0f0;
       font-size: 12px;
     }
     .protocol-row:last-child { border-bottom: none; }
-    .protocol-row label {
-      display: contents;
-      cursor: pointer;
+    .protocol-row-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
     }
-    .status-pill {
+    .protocol-name { font-weight: 600; font-size: 13px; }
+    .status {
       font-size: 10px;
       font-weight: 700;
       padding: 2px 6px;
       border-radius: 999px;
       white-space: nowrap;
     }
-    .status-pill.on {
-      background: #d1fae5;
-      color: #047857;
-    }
-    .status-pill.off {
-      background: #f3f4f6;
-      color: #6b7280;
-    }
-    .abn-side {
-      width: 120px;
+    .status.applied { background: #d1fae5; color: #047857; }
+    .status.missing { background: #f3f4f6; color: #6b7280; }
+    .protocol-actions {
       display: flex;
-      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
       gap: 8px;
-      align-items: stretch;
     }
-    .abn-indicator {
-      font-size: 11px;
-      text-align: center;
-      padding: 6px;
-      border-radius: 4px;
-      border: 1px solid #e5e7eb;
-      line-height: 1.3;
-    }
-    .abn-indicator.on {
-      background: #d1fae5;
-      border-color: #a7f3d0;
-      color: #047857;
-      font-weight: 700;
-    }
-    .abn-indicator.off {
-      background: #f9fafb;
-      color: #6b7280;
-    }
-    .abn-text-wrap {
-      margin-top: 10px;
-    }
-    .abn-text-wrap label {
-      display: block;
+    .abn-check {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       font-size: 12px;
-      font-weight: 600;
-      margin-bottom: 4px;
+      cursor: pointer;
     }
+    .empty {
+      padding: 14px;
+      color: #666;
+      font-size: 12px;
+    }
+    .add-box {
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      padding: 8px;
+      margin-bottom: 10px;
+      background: #fafafa;
+    }
+    .add-box .row { margin-bottom: 6px; }
     .custom-input, textarea.custom-input {
       width: 100%;
       box-sizing: border-box;
@@ -112,18 +109,9 @@
       font-family: inherit;
     }
     textarea.custom-input {
-      min-height: 56px;
+      min-height: 52px;
       resize: vertical;
-    }
-    .add-box {
-      border: 1px solid #e5e7eb;
-      border-radius: 4px;
-      padding: 8px;
       margin-bottom: 10px;
-      background: #fafafa;
-    }
-    .add-box .row {
-      margin-bottom: 6px;
     }
     .target-list {
       display: flex;
@@ -151,19 +139,14 @@
       align-items: flex-start;
     }
     .ok { color: #047857; }
-    .missing { color: #b45309; }
+    .missing-text { color: #b45309; }
     .muted { color: #888; }
     .btn-row {
       display: flex;
       flex-direction: column;
       gap: 8px;
-      margin-top: 10px;
     }
-    .btn-row.inline {
-      flex-direction: row;
-    }
-    .btn-row.inline button { width: auto; flex: 1; }
-    button {
+    button.action {
       width: 100%;
       padding: 8px;
       background-color: #0066cc;
@@ -174,98 +157,84 @@
       cursor: pointer;
       font-size: 12px;
     }
-    button.secondary { background-color: #445566; }
-    button.tertiary { background-color: #6b7280; }
-    button.danger {
+    button.action.secondary { background-color: #445566; }
+    button.action.tertiary { background-color: #6b7280; }
+    button.action.danger-sm {
       width: auto;
-      padding: 2px 8px;
+      padding: 4px 8px;
       background: #9b1c1c;
       font-size: 11px;
     }
-    button:hover { filter: brightness(0.92); }
-    button:disabled {
+    button.action:hover { filter: brightness(0.92); }
+    button.action:disabled {
       background-color: #99c2eb;
       cursor: not-allowed;
       filter: none;
     }
-    button.secondary:disabled,
-    button.tertiary:disabled { background-color: #9aa4ae; }
-    #status, #settingsStatus {
+    button.action.secondary:disabled,
+    button.action.tertiary:disabled { background-color: #9aa4ae; }
+    #mainStatus, #settingsStatus {
       margin-top: 8px;
       font-size: 12px;
       color: #444;
       word-break: break-word;
       white-space: pre-wrap;
-      max-height: 140px;
+      max-height: 120px;
       overflow: auto;
     }
-    .empty {
-      padding: 12px;
+    .abn-label {
+      display: block;
       font-size: 12px;
-      color: #666;
+      font-weight: 600;
+      margin-bottom: 4px;
     }
   </style>
 </head>
 <body>
-  <div id="mainView">
-    <h3>ModMed Protocols</h3>
-    <p class="hint">Checked = applied on this visit. Uncheck to remove. Use Reconfigure to manage tracked tests.</p>
+  <h3>ModMed Protocols</h3>
 
-    <div class="main-layout">
-      <div id="protocolTable" class="protocol-table">
-        <div class="empty">No tracked protocols yet. Open Reconfigure to add some.</div>
-      </div>
-
-      <div class="abn-side">
-        <button id="abnApplyBtn" class="secondary" type="button">Apply ABN signed</button>
-        <div id="abnIndicator" class="abn-indicator off">ABN not applied</div>
-      </div>
-    </div>
-
-    <div class="abn-text-wrap">
-      <label for="abnText">ABN signed</label>
-      <textarea id="abnText" class="custom-input" placeholder="Additional ABN text..."></textarea>
-    </div>
-
-    <div class="btn-row inline">
-      <button id="refreshBtn" class="tertiary" type="button">Refresh status</button>
-      <button id="reconfigureBtn" class="secondary" type="button">Reconfigure</button>
-    </div>
-    <div id="status"></div>
+  <div class="tabs">
+    <button type="button" class="tab active" data-tab="main">Main</button>
+    <button type="button" class="tab" data-tab="settings">Settings</button>
   </div>
 
-  <div id="settingsView" class="hidden">
-    <h3>Reconfigure tracking</h3>
+  <div id="mainTab">
+    <p class="hint">Tracked protocols on this visit. Applied ones can be removed. Use Apply Protocols for ones not yet applied.</p>
+
+    <div id="protocolList" class="protocol-list">
+      <div class="empty">No tracked protocols yet. Switch to Settings to add some.</div>
+    </div>
+
+    <label class="abn-label" for="abnText">ABN text</label>
+    <textarea id="abnText" class="custom-input">ABN signed</textarea>
+
+    <div class="btn-row">
+      <button id="applyProtocolsBtn" class="action" type="button">Apply Protocols</button>
+      <button id="refreshMainBtn" class="action tertiary" type="button">Refresh status</button>
+    </div>
+    <div id="mainStatus"></div>
+  </div>
+
+  <div id="settingsTab" class="hidden">
     <p class="hint">
       Add protocols to track. Detect uses procedure catalog ID; Apply uses protocolId.
-      Configure ABN apply ID here too.
     </p>
 
     <div class="add-box">
-      <h4>Add tracked protocol</h4>
       <div class="row"><input id="newName" class="custom-input" placeholder="Name (e.g. Optic Nerve)" /></div>
       <div class="row"><input id="newProtocolId" class="custom-input" placeholder="Protocol ID (apply)" /></div>
       <div class="row"><input id="newAliases" class="custom-input" placeholder="Optional aliases (comma-separated)" /></div>
       <div class="row"><input id="newProcedureId" class="custom-input" placeholder="Optional procedure catalog ID (detect)" /></div>
-      <button id="addBtn" class="secondary" type="button">Add to tracked tests</button>
+      <button id="addBtn" class="action secondary" type="button">Add to tracked tests</button>
     </div>
 
     <div id="targetList" class="target-list">
       <div class="muted">No tracked tests yet.</div>
     </div>
 
-    <div class="add-box">
-      <h4>ABN settings</h4>
-      <div class="row"><input id="abnProtocolId" class="custom-input" placeholder="ABN protocol ID (apply)" /></div>
-      <div class="row"><input id="abnProcedureId" class="custom-input" placeholder="Optional ABN procedure catalog ID (detect)" /></div>
-      <div class="row"><input id="abnAliases" class="custom-input" placeholder="ABN match aliases (default: ABN, ABN signed)" /></div>
-      <button id="saveAbnSettingsBtn" class="secondary" type="button">Save ABN settings</button>
-    </div>
-
     <div class="btn-row">
-      <button id="collectBtn" class="secondary" type="button">Collect procedure IDs from visit</button>
-      <button id="copyBtn" class="tertiary" type="button">Copy tracked JSON</button>
-      <button id="backBtn" type="button">Back to main</button>
+      <button id="collectBtn" class="action secondary" type="button">Collect procedure IDs from visit</button>
+      <button id="copyBtn" class="action tertiary" type="button">Copy tracked JSON</button>
     </div>
     <div id="settingsStatus"></div>
   </div>
