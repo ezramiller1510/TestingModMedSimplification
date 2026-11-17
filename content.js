@@ -378,13 +378,53 @@ function listOverviewProcedures(overview) {
   return out.filter((p) => p.catalogId);
 }
 
-function collectCatalogFromOverview(overview) {
+async function getTrackedTargets() {
+  const stored = await chrome.storage.local.get(["trackedProtocols", "protocolMappings"]);
+  const tracked = Array.isArray(stored.trackedProtocols) ? stored.trackedProtocols : [];
+  const mappings = stored.protocolMappings || {};
+
+  // Merge latest mapping fields onto each tracked item for matching/detect.
+  return tracked.map((t) => {
+    const m = mappings[t.key] || {};
+    return {
+      ...emptyMapping(t),
+      ...t,
+      ...m,
+      key: t.key,
+      name: t.name || m.name,
+      aliases: parseAliases(t.aliases || m.aliases),
+      protocolId: t.protocolId || m.protocolId || null
+    };
+  });
+}
+
+function collectCatalogFromOverview(overview, targets) {
   // Detect by procedure only. Diagnosis names are too coarse (one special-test
   // diagnosis can own Optos + Anterior Segment + other imaging).
   const procedures = listOverviewProcedures(overview);
   const found = [];
 
-  for (const target of PROTOCOL_TARGETS) {
+  for (const target of targets) {
+    // Prefer exact saved procedure catalog ID when present.
+    if (target.procedureCatalogId) {
+      const byId = procedures.filter((p) => String(p.catalogId) === String(target.procedureCatalogId));
+      if (byId.length) {
+        const primary = byId[0];
+        found.push({
+          key: target.key,
+          name: target.name,
+          procedureCatalogId: primary.catalogId,
+          procedureName: primary.name || null,
+          procedureAlias: primary.alias || null,
+          procedures: byId,
+          diagnosisName: primary.diagnosisName,
+          diagnosisCatalogId: primary.diagnosisCatalogId,
+          matchedBy: "procedure-id"
+        });
+        continue;
+      }
+    }
+
     const procedureHits = procedures.filter(
       (p) => targetMatchesText(target, p.name) || targetMatchesText(target, p.alias)
     );
@@ -441,7 +481,7 @@ function walkProtocolCandidates(value, out = [], seen = new Set()) {
   return out;
 }
 
-function collectProtocolIdsFromCapture() {
+function collectProtocolIdsFromCapture(targets) {
   const hits = [];
 
   for (const entry of readCaptureLog()) {
@@ -458,7 +498,7 @@ function collectProtocolIdsFromCapture() {
     if (!parsed) continue;
 
     for (const candidate of walkProtocolCandidates(parsed)) {
-      for (const target of PROTOCOL_TARGETS) {
+      for (const target of targets) {
         if (!targetMatchesText(target, candidate.name)) continue;
         hits.push({
           key: target.key,
@@ -476,7 +516,7 @@ function collectProtocolIdsFromCapture() {
 }
 
 function mergeMapping(existing, patch, source) {
-  const next = existing ? { ...existing } : emptyMapping(PROTOCOL_TARGETS.find((t) => t.key === patch.key) || patch);
+  const next = existing ? { ...existing } : emptyMapping(patch);
   const sources = new Set(next.sources || []);
 
   if (patch.protocolId) next.protocolId = String(patch.protocolId);
@@ -530,14 +570,20 @@ async function collectProtocolIdsForTargets() {
     throw new Error("Could not detect Visit ID. Open a visit note first.");
   }
 
+  const targets = await getTrackedTargets();
+  if (!targets.length) {
+    throw new Error("No tracked protocols yet. Add a name + protocol ID in the popup first.");
+  }
+
   const overview = await loadVisitOverview(visitId);
-  const catalogHits = collectCatalogFromOverview(overview.data);
-  const protocolHits = collectProtocolIdsFromCapture();
+  const catalogHits = collectCatalogFromOverview(overview.data, targets);
+  const protocolHits = collectProtocolIdsFromCapture(targets);
 
-  const stored = await chrome.storage.local.get(["protocolMappings"]);
+  const stored = await chrome.storage.local.get(["protocolMappings", "trackedProtocols"]);
   const mappings = { ...(stored.protocolMappings || {}) };
+  const tracked = Array.isArray(stored.trackedProtocols) ? [...stored.trackedProtocols] : [];
 
-  for (const target of PROTOCOL_TARGETS) {
+  for (const target of targets) {
     if (!mappings[target.key]) mappings[target.key] = emptyMapping(target);
   }
 
@@ -553,7 +599,17 @@ async function collectProtocolIdsForTargets() {
     );
   }
 
-  await chrome.storage.local.set({ protocolMappings: mappings });
+  // Keep trackedProtocols.protocolId in sync when capture finds/updates it.
+  for (let i = 0; i < tracked.length; i++) {
+    const m = mappings[tracked[i].key];
+    if (!m) continue;
+    if (m.protocolId) tracked[i].protocolId = m.protocolId;
+    if (m.procedureCatalogId) tracked[i].procedureCatalogId = m.procedureCatalogId;
+    if (m.procedureName) tracked[i].procedureName = m.procedureName;
+    if (m.procedureAlias) tracked[i].procedureAlias = m.procedureAlias;
+  }
+
+  await chrome.storage.local.set({ protocolMappings: mappings, trackedProtocols: tracked });
 
   return {
     visitId,
@@ -561,11 +617,11 @@ async function collectProtocolIdsForTargets() {
     overviewSource: overview.source,
     catalogHits,
     protocolHits,
-    mappings: PROTOCOL_TARGETS.map((t) => mappings[t.key]),
+    mappings: targets.map((t) => mappings[t.key]),
     captureCount: readCaptureLog().length,
     note:
       protocolHits.length === 0
-        ? "Procedure catalog IDs come from Visit Overview procedures. Protocol apply IDs need Protocols list/search or apply POST in captured traffic — open Protocols UI, search these names, then Collect again."
+        ? "Procedure catalog IDs come from Visit Overview procedures (matched by the names you entered). If protocolId is already entered, that’s enough for Apply."
         : undefined
   };
 }
@@ -576,19 +632,25 @@ async function checkTargetsApplied() {
     throw new Error("Could not detect Visit ID. Open a visit note first.");
   }
 
+  const targets = await getTrackedTargets();
+  if (!targets.length) {
+    throw new Error("No tracked protocols yet. Add a name + protocol ID in the popup first.");
+  }
+
   const stored = await chrome.storage.local.get(["protocolMappings"]);
   const mappings = stored.protocolMappings || {};
   const overview = await loadVisitOverview(visitId);
   const overviewProcedures = listOverviewProcedures(overview.data);
-  const catalogHits = collectCatalogFromOverview(overview.data);
+  const catalogHits = collectCatalogFromOverview(overview.data, targets);
   const hitKeys = new Set(catalogHits.map((h) => h.key));
 
-  const results = PROTOCOL_TARGETS.map((target) => {
+  const results = targets.map((target) => {
     const mapping = mappings[target.key] || emptyMapping(target);
     const overviewHit = catalogHits.find((h) => h.key === target.key) || null;
     const wantedIds = new Set(
       []
         .concat(mapping.procedureCatalogId ? [String(mapping.procedureCatalogId)] : [])
+        .concat(target.procedureCatalogId ? [String(target.procedureCatalogId)] : [])
         .concat(mapping.procedureCatalogIds || [])
         .map(String)
     );
@@ -604,7 +666,6 @@ async function checkTargetsApplied() {
         reason = `procedure catalog ${matchedProcedure.catalogId} (${matchedProcedure.name || matchedProcedure.alias || target.name})`;
       }
     } else if (overviewHit?.procedureCatalogId) {
-      // No saved mapping yet, but name/alias matched a procedure on this visit.
       applied = true;
       matchedProcedure = overviewHit;
       reason = `procedure name match ${overviewHit.procedureCatalogId} (${overviewHit.procedureName || target.name}) — collect to save ID`;

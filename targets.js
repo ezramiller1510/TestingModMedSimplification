@@ -1,46 +1,7 @@
-// Shared target list:
+// Helpers for user-defined tracked protocols.
 // - protocolId = apply (POST /protocols)
-// - procedureCatalogId(s) = detect (visit overview procedures)
-// Detect is procedure-based on purpose: diagnoses like special-test buckets can group
-// multiple imaging tests (e.g. Optos vs Anterior Segment) under one diagnosis.
-var PROTOCOL_TARGETS = [
-  {
-    key: "visual-field",
-    name: "Visual Field",
-    aliases: ["visual field", "visual fields", "hvfonline", "humphrey visual"]
-  },
-  {
-    key: "optos",
-    name: "Optos",
-    aliases: ["optos", "optomap"]
-  },
-  {
-    key: "cct",
-    name: "CCT",
-    aliases: ["cct", "central corneal thickness", "pachymetry"]
-  },
-  {
-    key: "optic-nerve",
-    name: "Optic Nerve",
-    aliases: [
-      "optic nerve",
-      "oct, optic nerve",
-      "oct optic nerve",
-      "optic nerve topography",
-      "opticnervetopography"
-    ]
-  },
-  {
-    key: "anterior-segment",
-    name: "Anterior Segment",
-    aliases: ["anterior segment", "as-oct", "as oct", "anterior oct"]
-  },
-  {
-    key: "retina",
-    name: "Retina",
-    aliases: ["retina", "macular oct", "oct macula", "oct, retina", "oct retina"]
-  }
-];
+// - procedureCatalogId = detect (visit overview procedure)
+// Targets are stored in chrome.storage.local.trackedProtocols (not hardcoded).
 
 function normalizeLabel(value) {
   return String(value || "")
@@ -49,29 +10,74 @@ function normalizeLabel(value) {
     .trim();
 }
 
+function slugifyKey(name) {
+  const base = normalizeLabel(name).replace(/\s+/g, "-") || "protocol";
+  return `${base}-${Date.now().toString(36)}`;
+}
+
+function targetMatchNeedles(target) {
+  return [target.name]
+    .concat(target.aliases || [])
+    .concat(target.procedureName ? [target.procedureName] : [])
+    .concat(target.procedureAlias ? [target.procedureAlias] : [])
+    .map(normalizeLabel)
+    .filter(Boolean);
+}
+
 function targetMatchesText(target, text) {
   const hay = normalizeLabel(text);
   if (!hay) return false;
-  const needles = [target.name].concat(target.aliases || []).map(normalizeLabel);
-  return needles.some((n) => n && (hay === n || hay.includes(n) || n.includes(hay)));
+  return targetMatchNeedles(target).some(
+    (n) => n && (hay === n || hay.includes(n) || n.includes(hay))
+  );
 }
 
 function emptyMapping(target) {
   return {
     key: target.key,
     name: target.name,
-    protocolId: null,
-    // Primary detect key
-    procedureCatalogId: null,
-    procedureName: null,
-    procedureAlias: null,
-    // Extra matched procedures for the same target, if any
-    procedureCatalogIds: [],
+    aliases: Array.isArray(target.aliases) ? target.aliases : [],
+    protocolId: target.protocolId != null ? String(target.protocolId) : null,
+    procedureCatalogId: target.procedureCatalogId != null ? String(target.procedureCatalogId) : null,
+    procedureName: target.procedureName || null,
+    procedureAlias: target.procedureAlias || null,
+    procedureCatalogIds: target.procedureCatalogId ? [String(target.procedureCatalogId)] : [],
     procedures: [],
-    // Diagnosis kept only as context, not used for detect
     diagnosisCatalogId: null,
     diagnosisName: null,
     sources: [],
     updatedAt: null
+  };
+}
+
+function parseAliases(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map((a) => String(a).trim()).filter(Boolean);
+  return String(raw)
+    .split(",")
+    .map((a) => a.trim())
+    .filter(Boolean);
+}
+
+function createTrackedProtocol({ name, protocolId, aliases, procedureCatalogId }) {
+  const trimmedName = String(name || "").trim();
+  if (!trimmedName) {
+    throw new Error("Name is required.");
+  }
+
+  const id = protocolId != null && String(protocolId).trim() ? String(protocolId).trim() : null;
+  const procId =
+    procedureCatalogId != null && String(procedureCatalogId).trim()
+      ? String(procedureCatalogId).trim()
+      : null;
+
+  return {
+    key: slugifyKey(trimmedName),
+    name: trimmedName,
+    aliases: parseAliases(aliases),
+    protocolId: id,
+    procedureCatalogId: procId,
+    procedureName: null,
+    procedureAlias: null
   };
 }
