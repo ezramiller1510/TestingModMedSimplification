@@ -411,47 +411,17 @@ async function applyTrackedByKey(key, { reload = true } = {}) {
 }
 
 function findMatchingOverviewProcedures(target, procedures) {
-  const wantedProcIds = new Set(
+  const wantedIds = new Set(
     []
       .concat(target.procedureCatalogId ? [String(target.procedureCatalogId)] : [])
       .concat(target.procedureCatalogIds || [])
       .map(String)
       .filter(Boolean)
   );
-  const wantedDxId = target.diagnosisCatalogId ? String(target.diagnosisCatalogId) : null;
 
-  const withDx = (list) =>
-    wantedDxId
-      ? list.filter((p) => String(p.diagnosisCatalogId || "") === wantedDxId)
-      : list;
+  let matches = procedures.filter((p) => p.catalogId && wantedIds.has(String(p.catalogId)));
+  if (matches.length) return matches;
 
-  // 1) Best: procedure catalog ID + diagnosis catalog ID
-  if (wantedProcIds.size) {
-    const byProc = procedures.filter((p) => p.catalogId && wantedProcIds.has(String(p.catalogId)));
-    const both = withDx(byProc);
-    if (both.length) return both;
-    // If a diagnosis ID is configured, do not fall back to procedure-only —
-    // Optos/CCT can share similar procedure naming under different "All Tests" diagnoses.
-    if (!wantedDxId && byProc.length) return byProc;
-  }
-
-  // 2) Diagnosis catalog ID + name/alias match inside that diagnosis
-  if (wantedDxId) {
-    const inDx = procedures.filter((p) => String(p.diagnosisCatalogId || "") === wantedDxId);
-    const named = inDx.filter(
-      (p) =>
-        targetMatchesText(target, p.name) ||
-        targetMatchesText(target, p.alias) ||
-        targetMatchesText(target, p.diagnosisName)
-    );
-    if (named.length) return named;
-    // If this diagnosis bucket exists on the visit and we have no procedure id yet,
-    // treat the whole visitDiagnosis as the match (needed for delete).
-    if (inDx.length) return inDx;
-    return [];
-  }
-
-  // 3) Legacy name-only fallback (no diagnosis catalog ID collected yet)
   return procedures.filter(
     (p) =>
       targetMatchesText(target, p.name) ||
@@ -467,21 +437,17 @@ async function unapplyTrackedByKey(key, { reload = true } = {}) {
   const target = await getTrackedByKey(key);
   const overview = await loadVisitOverview(visitId, { forceProbe: true });
   const procedures = listOverviewProceduresDetailed(overview.data);
-  console.log(overview)
   const matches = findMatchingOverviewProcedures(target, procedures);
 
   if (!matches.length) {
     const available = procedures
-      .map((p) => {
-        const label = p.name || p.alias || p.diagnosisName || "?";
-        return `${label} [dxCatalog=${p.diagnosisCatalogId || "?"}, visitDx=${p.visitDiagnosisId || "?"}]`;
-      })
+      .map((p) => p.name || p.alias || p.diagnosisName)
+      .filter(Boolean)
       .slice(0, 12);
     throw new Error(
       `“${target.name}” does not appear applied on this visit.` +
-        (target.diagnosisCatalogId ? ` Looking for diagnosisCatalogId=${target.diagnosisCatalogId}.` : "") +
         (available.length
-          ? ` Seen: ${available.join("; ")}. Run Collect or set diagnosis catalog ID in Settings.`
+          ? ` Procedures seen: ${available.join("; ")}. Add one of those as an alias or Collect procedure IDs.`
           : " No procedures were found in visit overview.")
     );
   }
@@ -667,10 +633,26 @@ async function loadVisitOverview(visitId, { forceProbe = false } = {}) {
 }
 
 function listOverviewProcedures(overview) {
-  // Same shape as detailed list; used for detect/collect/check.
-  return listOverviewProceduresDetailed(overview).filter(
-    (p) => p.catalogId || p.diagnosisCatalogId || p.visitDiagnosisId
-  );
+  const diagnoses = [].concat(overview.diagnoses || []);
+  const out = [];
+
+  for (const dx of diagnoses) {
+    const dxName = dx.diagnosisName || dx.diagnosisNameWithRO || dx.diagnosis?.diagnosisName || "";
+    const diagnosisCatalogId = dx.diagnosis?.id != null ? String(dx.diagnosis.id) : null;
+
+    for (const p of dx.procedures || []) {
+      out.push({
+        name: p.procedure || p.veProcedure?.name || "",
+        alias: p.veProcedure?.procedureAlias || "",
+        catalogId: p.veProcedure?.id != null ? String(p.veProcedure.id) : null,
+        visitProcedureId: p.id != null ? String(p.id) : null,
+        diagnosisName: dxName || null,
+        diagnosisCatalogId
+      });
+    }
+  }
+
+  return out.filter((p) => p.catalogId);
 }
 
 async function getTrackedTargets() {
@@ -688,54 +670,54 @@ async function getTrackedTargets() {
       key: t.key,
       name: t.name || m.name,
       aliases: parseAliases(t.aliases || m.aliases),
-      protocolId: t.protocolId || m.protocolId || null,
-      procedureCatalogId: t.procedureCatalogId || m.procedureCatalogId || null,
-      diagnosisCatalogId: t.diagnosisCatalogId || m.diagnosisCatalogId || null,
-      diagnosisName: t.diagnosisName || m.diagnosisName || null
+      protocolId: t.protocolId || m.protocolId || null
     };
   });
 }
 
 function collectCatalogFromOverview(overview, targets) {
-  // Collect procedure catalog ID + diagnosis catalog ID.
-  // Diagnosis *names* like "All Tests" can be shared; diagnosis catalog IDs differ per test.
+  // Detect by procedure only. Diagnosis names are too coarse (one special-test
+  // diagnosis can own Optos + Anterior Segment + other imaging).
   const procedures = listOverviewProcedures(overview);
   const found = [];
 
   for (const target of targets) {
-    const hits = findMatchingOverviewProcedures(target, procedures);
-    if (!hits.length) {
-      // First-time collect: discover by procedure/diagnosis name only.
-      const named = procedures.filter(
-        (p) => targetMatchesText(target, p.name) || targetMatchesText(target, p.alias)
-      );
-      if (!named.length) continue;
-      const primary = named[0];
-      found.push({
-        key: target.key,
-        name: target.name,
-        procedureCatalogId: primary.catalogId,
-        procedureName: primary.name || null,
-        procedureAlias: primary.alias || null,
-        procedures: named,
-        diagnosisName: primary.diagnosisName,
-        diagnosisCatalogId: primary.diagnosisCatalogId,
-        matchedBy: "procedure-name-collect"
-      });
-      continue;
+    // Prefer exact saved procedure catalog ID when present.
+    if (target.procedureCatalogId) {
+      const byId = procedures.filter((p) => String(p.catalogId) === String(target.procedureCatalogId));
+      if (byId.length) {
+        const primary = byId[0];
+        found.push({
+          key: target.key,
+          name: target.name,
+          procedureCatalogId: primary.catalogId,
+          procedureName: primary.name || null,
+          procedureAlias: primary.alias || null,
+          procedures: byId,
+          diagnosisName: primary.diagnosisName,
+          diagnosisCatalogId: primary.diagnosisCatalogId,
+          matchedBy: "procedure-id"
+        });
+        continue;
+      }
     }
 
-    const primary = hits[0];
+    const procedureHits = procedures.filter(
+      (p) => targetMatchesText(target, p.name) || targetMatchesText(target, p.alias)
+    );
+    if (!procedureHits.length) continue;
+
+    const primary = procedureHits[0];
     found.push({
       key: target.key,
       name: target.name,
-      procedureCatalogId: primary.catalogId || target.procedureCatalogId || null,
+      procedureCatalogId: primary.catalogId,
       procedureName: primary.name || null,
       procedureAlias: primary.alias || null,
-      procedures: hits,
+      procedures: procedureHits,
       diagnosisName: primary.diagnosisName,
-      diagnosisCatalogId: primary.diagnosisCatalogId || target.diagnosisCatalogId || null,
-      matchedBy: target.procedureCatalogId || target.diagnosisCatalogId ? "catalog-ids" : "name"
+      diagnosisCatalogId: primary.diagnosisCatalogId,
+      matchedBy: "procedure-name"
     });
   }
 
@@ -900,8 +882,6 @@ async function collectProtocolIdsForTargets() {
     if (!m) continue;
     if (m.protocolId) tracked[i].protocolId = m.protocolId;
     if (m.procedureCatalogId) tracked[i].procedureCatalogId = m.procedureCatalogId;
-    if (m.diagnosisCatalogId) tracked[i].diagnosisCatalogId = m.diagnosisCatalogId;
-    if (m.diagnosisName) tracked[i].diagnosisName = m.diagnosisName;
     if (m.procedureName) tracked[i].procedureName = m.procedureName;
     if (m.procedureAlias) tracked[i].procedureAlias = m.procedureAlias;
 
@@ -923,7 +903,9 @@ async function collectProtocolIdsForTargets() {
     mappings: targets.map((t) => mappings[t.key]),
     captureCount: readCaptureLog().length,
     note:
-      "Collect stores procedureCatalogId + diagnosisCatalogId (needed because tests like Optos/CCT can share names like All Tests but use different diagnosis ids)."
+      protocolHits.length === 0
+        ? "Procedure catalog IDs come from Visit Overview procedures (matched by the names you entered). If protocolId is already entered, that’s enough for Apply."
+        : undefined
   };
 }
 
@@ -942,36 +924,34 @@ async function checkTargetsApplied() {
   const mappings = stored.protocolMappings || {};
   const overview = await loadVisitOverview(visitId);
   const overviewProcedures = listOverviewProcedures(overview.data);
+  const catalogHits = collectCatalogFromOverview(overview.data, targets);
+  const hitKeys = new Set(catalogHits.map((h) => h.key));
 
   const results = targets.map((target) => {
     const mapping = mappings[target.key] || emptyMapping(target);
-    const merged = {
-      ...target,
-      procedureCatalogId: target.procedureCatalogId || mapping.procedureCatalogId || null,
-      procedureCatalogIds: []
-        .concat(target.procedureCatalogId || [])
-        .concat(mapping.procedureCatalogId || [])
+    const overviewHit = catalogHits.find((h) => h.key === target.key) || null;
+    const wantedIds = new Set(
+      []
+        .concat(mapping.procedureCatalogId ? [String(mapping.procedureCatalogId)] : [])
+        .concat(target.procedureCatalogId ? [String(target.procedureCatalogId)] : [])
         .concat(mapping.procedureCatalogIds || [])
-        .map(String),
-      diagnosisCatalogId: target.diagnosisCatalogId || mapping.diagnosisCatalogId || null,
-      procedureName: mapping.procedureName || target.procedureName || null,
-      procedureAlias: mapping.procedureAlias || target.procedureAlias || null,
-      aliases: parseAliases([].concat(target.aliases || []).concat(mapping.aliases || []))
-    };
+        .map(String)
+    );
 
-    const matches = findMatchingOverviewProcedures(merged, overviewProcedures);
-    const matchedProcedure = matches[0] || null;
-    const applied = Boolean(matchedProcedure);
+    let applied = false;
+    let reason = "procedure not found on visit overview";
+    let matchedProcedure = null;
 
-    let reason = "not found on visit overview";
-    if (matchedProcedure) {
-      reason =
-        `visitDiagnosis ${matchedProcedure.visitDiagnosisId || "?"} · ` +
-        `dxCatalog ${matchedProcedure.diagnosisCatalogId || "?"} · ` +
-        `procCatalog ${matchedProcedure.catalogId || "?"} ` +
-        `(${matchedProcedure.name || matchedProcedure.diagnosisName || target.name})`;
-    } else if (!merged.procedureCatalogId && !merged.diagnosisCatalogId) {
-      reason = "missing collected procedure/diagnosis catalog IDs — run Collect in Settings";
+    if (wantedIds.size) {
+      matchedProcedure = overviewProcedures.find((p) => wantedIds.has(String(p.catalogId)));
+      if (matchedProcedure) {
+        applied = true;
+        reason = `procedure catalog ${matchedProcedure.catalogId} (${matchedProcedure.name || matchedProcedure.alias || target.name})`;
+      }
+    } else if (overviewHit?.procedureCatalogId) {
+      applied = true;
+      matchedProcedure = overviewHit;
+      reason = `procedure name match ${overviewHit.procedureCatalogId} (${overviewHit.procedureName || target.name}) — collect to save ID`;
     }
 
     return {
@@ -979,10 +959,9 @@ async function checkTargetsApplied() {
       name: target.name,
       applied,
       reason,
-      mapping: merged,
-      matchedProcedure,
-      visitDiagnosisId: matchedProcedure?.visitDiagnosisId || null,
-      diagnosisCatalogId: matchedProcedure?.diagnosisCatalogId || merged.diagnosisCatalogId || null
+      mapping,
+      overviewHit,
+      matchedProcedure
     };
   });
 
@@ -992,6 +971,7 @@ async function checkTargetsApplied() {
     results,
     applied: results.filter((r) => r.applied).map((r) => r.name),
     missing: results.filter((r) => !r.applied).map((r) => r.name),
-    knownKeys: Object.keys(mappings)
+    knownKeys: Object.keys(mappings),
+    hitKeys: [...hitKeys]
   };
 }
