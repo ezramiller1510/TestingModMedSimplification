@@ -51,13 +51,15 @@ async function loadState() {
     "trackedProtocols",
     "protocolMappings",
     "abnExtraText",
-    "abnSelections"
+    "abnSelections",
+    "applySelections"
   ]);
   return {
     tracked: Array.isArray(stored.trackedProtocols) ? stored.trackedProtocols : [],
     mappings: stored.protocolMappings || {},
     abnExtraText: stored.abnExtraText != null ? stored.abnExtraText : "ABN signed",
-    abnSelections: stored.abnSelections || {}
+    abnSelections: stored.abnSelections || {},
+    applySelections: stored.applySelections || {}
   };
 }
 
@@ -115,19 +117,22 @@ function renderSettingsList(tracked, mappings) {
       const trackedNext = state.tracked.filter((t) => t.key !== key);
       const mappingsNext = { ...state.mappings };
       const abnSelections = { ...state.abnSelections };
+      const applySelections = { ...state.applySelections };
       delete mappingsNext[key];
       delete abnSelections[key];
+      delete applySelections[key];
       await chrome.storage.local.set({
         trackedProtocols: trackedNext,
         protocolMappings: mappingsNext,
-        abnSelections
+        abnSelections,
+        applySelections
       });
       await refreshSettings("Removed tracked test.");
     });
   });
 }
 
-function renderMainList(results, abnSelections) {
+function renderMainList(results, abnSelections, applySelections = {}) {
   const list = $("protocolList");
   list.innerHTML = "";
 
@@ -143,16 +148,36 @@ function renderMainList(results, abnSelections) {
     const top = document.createElement("div");
     top.className = "protocol-row-top";
 
+    const selectWrap = document.createElement("label");
+    selectWrap.className = "protocol-select";
+
+    const selectCb = document.createElement("input");
+    selectCb.type = "checkbox";
+    selectCb.className = "apply-select";
+    selectCb.dataset.key = r.key;
+    // Default: selected if not applied yet (unless user already saved a preference).
+    const savedSelection = applySelections[r.key];
+    selectCb.checked =
+      savedSelection != null ? Boolean(savedSelection) : !r.applied;
+    selectCb.addEventListener("change", async () => {
+      const state = await loadState();
+      const next = { ...state.applySelections, [r.key]: selectCb.checked };
+      await chrome.storage.local.set({ applySelections: next });
+    });
+
     const name = document.createElement("div");
     name.className = "protocol-name";
     name.textContent = r.name;
+
+    selectWrap.appendChild(selectCb);
+    selectWrap.appendChild(name);
 
     const status = document.createElement("span");
     status.className = `status ${r.applied ? "applied" : "missing"}`;
     status.textContent = r.applied ? "Applied" : "Not applied";
     status.title = r.reason || "";
 
-    top.appendChild(name);
+    top.appendChild(selectWrap);
     top.appendChild(status);
 
     const actions = document.createElement("div");
@@ -208,7 +233,7 @@ async function refreshMain(statusText) {
   $("abnText").value = state.abnExtraText || "ABN signed";
 
   if (!state.tracked.length) {
-    renderMainList([], state.abnSelections);
+    renderMainList([], state.abnSelections, state.applySelections);
     if (statusText != null) $("mainStatus").textContent = statusText;
     return;
   }
@@ -217,7 +242,7 @@ async function refreshMain(statusText) {
   try {
     const response = await sendToTab("GET_MAIN_STATUS");
     if (!response?.success) throw new Error(response?.error || "Failed to load status");
-    renderMainList(response.results || [], state.abnSelections);
+    renderMainList(response.results || [], state.abnSelections, state.applySelections);
     $("mainStatus").textContent =
       statusText ||
       `Visit ${response.visitId || "?"} · ${(response.applied || []).length}/${(response.results || []).length} applied`;
@@ -229,7 +254,8 @@ async function refreshMain(statusText) {
         applied: false,
         reason: err.message
       })),
-      state.abnSelections
+      state.abnSelections,
+      state.applySelections
     );
     $("mainStatus").textContent = err.message;
   }
@@ -249,13 +275,27 @@ $("applyProtocolsBtn").addEventListener("click", async () => {
   await chrome.storage.local.set({ abnExtraText: $("abnText").value });
   const state = await loadState();
 
-  setMainBusy(true, "Checking visit...");
+  // Prefer live checkbox state from the UI.
+  const selectedKeys = [
+    ...document.querySelectorAll("#protocolList input.apply-select:checked")
+  ].map((cb) => cb.dataset.key);
+
+  if (!selectedKeys.length) {
+    $("mainStatus").textContent = "Select at least one protocol to apply.";
+    return;
+  }
+
+  setMainBusy(true, "Preparing selected protocols...");
   try {
     const status = await sendToTab("GET_MAIN_STATUS");
     if (!status?.success) throw new Error(status?.error || "Could not read visit status");
 
-    const toApply = (status.results || []).filter((r) => !r.applied);
-    const protocolIds = toApply
+    const byKey = new Map((status.results || []).map((r) => [r.key, r]));
+    const selected = selectedKeys
+      .map((key) => byKey.get(key) || state.tracked.find((t) => t.key === key))
+      .filter(Boolean);
+
+    const protocolIds = selected
       .map((r) => {
         const tracked = state.tracked.find((t) => t.key === r.key);
         return tracked?.protocolId || state.mappings[r.key]?.protocolId || null;
@@ -263,30 +303,32 @@ $("applyProtocolsBtn").addEventListener("click", async () => {
       .filter(Boolean);
 
     if (!protocolIds.length) {
-      setMainBusy(false, "Nothing to apply — all tracked protocols are already applied (or missing protocolIds).");
-      renderMainList(status.results || [], state.abnSelections);
+      setMainBusy(
+        false,
+        "Selected protocols are missing protocolIds. Add them in Settings."
+      );
+      renderMainList(status.results || [], state.abnSelections, state.applySelections);
       return;
     }
 
-    // Remember which selected rows wanted ABN text (for later wiring).
-    const abnForApply = toApply
+    const abnForApply = selected
       .filter((r) => state.abnSelections[r.key])
       .map((r) => r.name);
 
     setMainBusy(
       true,
-      `Applying ${protocolIds.length} protocol(s)...` +
+      `Applying ${protocolIds.length} selected protocol(s)...` +
         (abnForApply.length ? ` ABN text flagged for: ${abnForApply.join(", ")}` : "")
     );
 
     const response = await sendToTab("APPLY_PROTOCOLS", {
       protocolIds,
       abnText: $("abnText").value,
-      abnKeys: toApply.filter((r) => state.abnSelections[r.key]).map((r) => r.key),
+      abnKeys: selected.filter((r) => state.abnSelections[r.key]).map((r) => r.key),
       reload: true
     });
     if (!response?.success) throw new Error(response?.error || "Apply failed");
-    $("mainStatus").textContent = "Applied. Reloading page...";
+    $("mainStatus").textContent = "Applied selected protocols. Reloading page...";
   } catch (err) {
     setMainBusy(false, err.message);
   }

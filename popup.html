@@ -63,6 +63,13 @@
       gap: 8px;
       margin-bottom: 6px;
     }
+    .protocol-select {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .protocol-select input { flex: 0 0 auto; }
     .protocol-name { font-weight: 600; font-size: 13px; }
     .status {
       font-size: 10px;
@@ -199,7 +206,7 @@
   </div>
 
   <div id="mainTab">
-    <p class="hint">Tracked protocols on this visit. Applied ones can be removed. Use Apply Protocols for ones not yet applied.</p>
+    <p class="hint">Select which protocols to apply. Applied ones can be removed. ABN text can still be toggled per protocol.</p>
 
     <div id="protocolList" class="protocol-list">
       <div class="empty">No tracked protocols yet. Switch to Settings to add some.</div>
