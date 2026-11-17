@@ -110,13 +110,17 @@ function emptyMapping(target) {
     name: target.name,
     aliases: Array.isArray(target.aliases) ? target.aliases : [],
     protocolId: target.protocolId != null ? String(target.protocolId) : null,
+    // Detect / delete keys:
+    // - procedureCatalogId: which test (Optos vs CCT)
+    // - diagnosisCatalogId: which diagnosis bucket that test lives under
+    //   (e.g. different "All Tests" diagnosis ids per test type)
     procedureCatalogId: target.procedureCatalogId != null ? String(target.procedureCatalogId) : null,
     procedureName: target.procedureName || null,
     procedureAlias: target.procedureAlias || null,
     procedureCatalogIds: target.procedureCatalogId ? [String(target.procedureCatalogId)] : [],
     procedures: [],
-    diagnosisCatalogId: null,
-    diagnosisName: null,
+    diagnosisCatalogId: target.diagnosisCatalogId != null ? String(target.diagnosisCatalogId) : null,
+    diagnosisName: target.diagnosisName || null,
     sources: [],
     updatedAt: null
   };
@@ -131,7 +135,7 @@ function parseAliases(raw) {
     .filter(Boolean);
 }
 
-function createTrackedProtocol({ name, protocolId, aliases, procedureCatalogId }) {
+function createTrackedProtocol({ name, protocolId, aliases, procedureCatalogId, diagnosisCatalogId }) {
   const trimmedName = String(name || "").trim();
   if (!trimmedName) {
     throw new Error("Name is required.");
@@ -142,6 +146,10 @@ function createTrackedProtocol({ name, protocolId, aliases, procedureCatalogId }
     procedureCatalogId != null && String(procedureCatalogId).trim()
       ? String(procedureCatalogId).trim()
       : null;
+  const dxId =
+    diagnosisCatalogId != null && String(diagnosisCatalogId).trim()
+      ? String(diagnosisCatalogId).trim()
+      : null;
 
   return {
     key: slugifyKey(trimmedName),
@@ -149,7 +157,9 @@ function createTrackedProtocol({ name, protocolId, aliases, procedureCatalogId }
     aliases: parseAliases(aliases),
     protocolId: id,
     procedureCatalogId: procId,
+    diagnosisCatalogId: dxId,
     procedureName: null,
-    procedureAlias: null
+    procedureAlias: null,
+    diagnosisName: null
   };
 }

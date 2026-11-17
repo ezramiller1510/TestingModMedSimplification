@@ -92,7 +92,9 @@ function renderSettingsList(tracked, mappings) {
     const m = mappings[target.key] || emptyMapping(target);
     const protocolId = target.protocolId || m.protocolId || null;
     const procedureId = m.procedureCatalogId || target.procedureCatalogId || null;
+    const diagnosisId = m.diagnosisCatalogId || target.diagnosisCatalogId || null;
     const procLabel = m.procedureName || m.procedureAlias || "";
+    const dxLabel = m.diagnosisName || target.diagnosisName || "";
 
     const row = document.createElement("div");
     row.className = "target";
@@ -103,7 +105,9 @@ function renderSettingsList(tracked, mappings) {
       </div>
       <span class="${protocolId ? "ok" : "missing-text"}">protocolId: ${protocolId || "missing"}</span><br>
       <span class="${procedureId ? "ok" : "missing-text"}">procedureCatalogId: ${procedureId || "missing"}</span>
-      ${procLabel ? ` <span>(${procLabel})</span>` : ""}
+      ${procLabel ? ` <span>(${procLabel})</span>` : ""}<br>
+      <span class="${diagnosisId ? "ok" : "missing-text"}">diagnosisCatalogId: ${diagnosisId || "missing"}</span>
+      ${dxLabel ? ` <span>(${dxLabel})</span>` : ""}
       ${(target.aliases || []).length ? `<br><span class="muted">aliases: ${target.aliases.join(", ")}</span>` : ""}
     `;
     row.querySelector("strong").textContent = target.name;
@@ -340,7 +344,8 @@ $("addBtn").addEventListener("click", async () => {
       name: $("newName").value,
       protocolId: $("newProtocolId").value,
       aliases: $("newAliases").value,
-      procedureCatalogId: $("newProcedureId").value
+      procedureCatalogId: $("newProcedureId").value,
+      diagnosisCatalogId: $("newDiagnosisId").value
     });
     const state = await loadState();
     const filtered = state.tracked.filter(
@@ -365,6 +370,7 @@ $("addBtn").addEventListener("click", async () => {
     $("newProtocolId").value = "";
     $("newAliases").value = "";
     $("newProcedureId").value = "";
+    $("newDiagnosisId").value = "";
     await refreshSettings(`Tracking “${item.name}”.`);
   } catch (err) {
     $("settingsStatus").textContent = err.message;
@@ -378,7 +384,7 @@ $("collectBtn").addEventListener("click", async () => {
     if (!response?.success) throw new Error(response?.error || "Collect failed");
     const lines = (response.mappings || []).map(
       (m) =>
-        `- ${m.name}: protocolId=${m.protocolId || "?"} procedureCatalogId=${m.procedureCatalogId || "?"}`
+        `- ${m.name}: protocolId=${m.protocolId || "?"} procedureCatalogId=${m.procedureCatalogId || "?"} diagnosisCatalogId=${m.diagnosisCatalogId || "?"} (${m.diagnosisName || "—"})`
     );
     await refreshSettings(
       [`Visit: ${response.visitId}`, "", ...lines, response.note ? `\n${response.note}` : ""]
@@ -402,7 +408,9 @@ $("copyBtn").addEventListener("click", async () => {
       aliases: t.aliases || [],
       protocolId: t.protocolId || m.protocolId || null,
       procedureCatalogId: m.procedureCatalogId || t.procedureCatalogId || null,
-      procedureName: m.procedureName || null
+      procedureName: m.procedureName || null,
+      diagnosisCatalogId: m.diagnosisCatalogId || t.diagnosisCatalogId || null,
+      diagnosisName: m.diagnosisName || t.diagnosisName || null
     };
   });
   const text = JSON.stringify(payload, null, 2);
