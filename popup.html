@@ -1,65 +1,89 @@
 <!DOCTYPE html>
 <html>
-
 <head>
-    <meta charset="UTF-8">
-    <title>Appointment Export</title>
-    <link rel="stylesheet" href="popup.css">
-
+  <meta charset="UTF-8">
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      width: 260px;
+      padding: 12px;
+      margin: 0;
+      color: #222;
+    }
+    h3 {
+      margin: 0 0 10px 0;
+      font-size: 15px;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 6px;
+    }
+    .protocol-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .custom-input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px;
+      margin-bottom: 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    button {
+      width: 100%;
+      padding: 8px;
+      background-color: #0066cc;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0052a3;
+    }
+    button:disabled {
+      background-color: #99c2eb;
+      cursor: not-allowed;
+    }
+    #status {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #444;
+      word-break: break-word;
+    }
+  </style>
 </head>
-
 <body>
+  <h3>ModMed Protocols</h3>
 
-    <h2>Export Appointment Data</h2>
+  <div class="protocol-list">
+    <label>
+      <input type="checkbox" name="protocol" value="101074" data-name="Glaucoma Tests">
+      Test Protocol (101074)
+    </label>
+    <!-- Duplicate the <label> block above to add more saved protocols -->
+  </div>
 
-    <div class="field-list">
-        <label><input type="checkbox" id="patientName" checked> Patient Name</label>
+  <input 
+    type="text" 
+    id="customId" 
+    class="custom-input" 
+    placeholder="Or enter ID(s): e.g. 101075, 101076"
+  >
 
-        <label><input type="checkbox" id="patientNumber"> Patient Number (MRN)</label>
+  <button id="applyBtn">Apply Protocols</button>
+  <div id="status"></div>
 
-        <label><input type="checkbox" id="phoneNumbers"> Phone Numbers</label>
-
-        <label><input type="checkbox" id="surgeryType"> Surgery Type</label>
-
-        <label><input type="checkbox" id="birthday" > Birthday</label>
-
-        <label><input type="checkbox" id="age" > Age</label>
-
-        <label><input type="checkbox" id="gender" > Gender</label>
-
-        <label><input type="checkbox" id="healthcareProvider"> Healthcare Provider</label>
-
-        <label><input type="checkbox" id="procedureDetails" checked> Procedure Details</label>
-
-        <label><input type="checkbox" id="date"> Date</label>
-
-        <label><input type="checkbox" id="time" checked> Time</label>
-
-        <label><input type="checkbox" id="surgeryCenter"> Surgery Center</label>
-
-        <label><input type="checkbox" id="patientStatus"> Patient Status</label>
-        <hr>
-
-        <label>
-            <input type="checkbox" id="removeLaser" checked>
-            Remove ASC Laser appointments
-        </label>
-        <div id = "error"></div>
-
-    </div>
-
-    <button id="scrape">
-        Export Selected Fields
-    </button>
-
-    <script src="popup.js"></script>
-
-    <!-- for editing docs -->
-    <!-- <script src="https://unpkg.com/docx@9.7.1/build/index.js"></script> -->
- 
-    <script src="docx.bundle.js"></script>
-
-
+  <script src="popup.js"></script>
 </body>
-
 </html>

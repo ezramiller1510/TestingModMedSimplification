@@ -1,35 +1,28 @@
 {
-    "manifest_version": 3,
-    "name": "Table Scraper",
-    "version": "1.0",
-
-    "permissions": [
-        "activeTab",
-        "scripting",
-        "downloads",
-        "storage"
-    ],
-    "background": {
-        "service_worker": "background.js",
-        "type": "module"
+  "manifest_version": 3,
+  "name": "ModMed Protocol Automator",
+  "version": "1.0",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://rep.modmedapp.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://rep.modmedapp.com/*"],
+      "js": ["interceptor.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
     },
-
-    "host_permissions": [
-        "https://rep.modmedapp.com/*"
-    ],
-
-    "action": {
-        "default_popup": "popup.html"
-    },
-
-    "content_scripts": [
-        {
-            "matches": [
-                "https://rep.modmedapp.com/*"
-            ],
-            "js": [
-                "content.js"
-            ]
-        }
-    ]
+    {
+      "matches": ["https://rep.modmedapp.com/*"],
+      "js": ["content.js"]
+    }
+  ]
 }
