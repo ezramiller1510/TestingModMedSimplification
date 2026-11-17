@@ -5,7 +5,7 @@
   <style>
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      width: 260px;
+      width: 360px;
       padding: 12px;
       margin: 0;
       color: #222;
@@ -13,32 +13,147 @@
     h3 {
       margin: 0 0 10px 0;
       font-size: 15px;
+    }
+    .tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 12px;
       border-bottom: 1px solid #ddd;
-      padding-bottom: 6px;
+    }
+    .tab {
+      flex: 1;
+      padding: 8px;
+      border: none;
+      background: transparent;
+      border-bottom: 2px solid transparent;
+      font-weight: 600;
+      font-size: 13px;
+      color: #666;
+      cursor: pointer;
+    }
+    .tab.active {
+      color: #0066cc;
+      border-bottom-color: #0066cc;
+    }
+    .hidden { display: none !important; }
+    .hint {
+      margin: 0 0 10px;
+      font-size: 11px;
+      color: #666;
+      line-height: 1.35;
     }
     .protocol-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      margin-bottom: 12px;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      max-height: 260px;
+      overflow: auto;
+      margin-bottom: 10px;
+      background: #fff;
     }
-    label {
+    .protocol-row {
+      padding: 10px;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 12px;
+    }
+    .protocol-row:last-child { border-bottom: none; }
+    .protocol-row-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .protocol-select {
       display: flex;
       align-items: center;
       gap: 8px;
-      font-size: 13px;
+      min-width: 0;
+    }
+    .protocol-select input { flex: 0 0 auto; }
+    .protocol-name { font-weight: 600; font-size: 13px; }
+    .status {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+    .status.applied { background: #d1fae5; color: #047857; }
+    .status.missing { background: #f3f4f6; color: #6b7280; }
+    .protocol-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .abn-check {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
       cursor: pointer;
     }
-    .custom-input {
+    .empty {
+      padding: 14px;
+      color: #666;
+      font-size: 12px;
+    }
+    .add-box {
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      padding: 8px;
+      margin-bottom: 10px;
+      background: #fafafa;
+    }
+    .add-box .row { margin-bottom: 6px; }
+    .custom-input, textarea.custom-input {
       width: 100%;
       box-sizing: border-box;
       padding: 6px;
-      margin-bottom: 10px;
       border: 1px solid #ccc;
       border-radius: 4px;
       font-size: 12px;
+      font-family: inherit;
     }
-    button {
+    textarea.custom-input {
+      min-height: 52px;
+      resize: vertical;
+      margin-bottom: 10px;
+    }
+    .target-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 10px;
+      max-height: 180px;
+      overflow: auto;
+      border: 1px solid #e5e7eb;
+      border-radius: 4px;
+      padding: 8px;
+      background: #fff;
+    }
+    .target {
+      font-size: 12px;
+      line-height: 1.35;
+      border-bottom: 1px solid #f0f0f0;
+      padding-bottom: 6px;
+    }
+    .target:last-child { border-bottom: none; padding-bottom: 0; }
+    .target-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .ok { color: #047857; }
+    .missing-text { color: #b45309; }
+    .muted { color: #888; }
+    .btn-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    button.action {
       width: 100%;
       padding: 8px;
       background-color: #0066cc;
@@ -47,43 +162,94 @@
       border-radius: 4px;
       font-weight: 600;
       cursor: pointer;
+      font-size: 12px;
     }
-    button:hover {
-      background-color: #0052a3;
+    button.action.secondary { background-color: #445566; }
+    button.action.tertiary { background-color: #6b7280; }
+    button.action.danger-sm {
+      width: auto;
+      padding: 4px 8px;
+      background: #9b1c1c;
+      font-size: 11px;
     }
-    button:disabled {
+    button.action:hover { filter: brightness(0.92); }
+    button.action:disabled {
       background-color: #99c2eb;
       cursor: not-allowed;
+      filter: none;
     }
-    #status {
+    button.action.secondary:disabled,
+    button.action.tertiary:disabled { background-color: #9aa4ae; }
+    #mainStatus, #settingsStatus {
       margin-top: 8px;
       font-size: 12px;
       color: #444;
       word-break: break-word;
+      white-space: pre-wrap;
+      max-height: 120px;
+      overflow: auto;
+    }
+    .abn-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 4px;
     }
   </style>
 </head>
 <body>
   <h3>ModMed Protocols</h3>
 
-  <div class="protocol-list">
-    <label>
-      <input type="checkbox" name="protocol" value="101074" data-name="Glaucoma Tests">
-      Test Protocol (101074)
-    </label>
-    <!-- Duplicate the <label> block above to add more saved protocols -->
+  <div class="tabs">
+    <button type="button" class="tab active" data-tab="main">Main</button>
+    <button type="button" class="tab" data-tab="settings">Settings</button>
   </div>
 
-  <input 
-    type="text" 
-    id="customId" 
-    class="custom-input" 
-    placeholder="Or enter ID(s): e.g. 101075, 101076"
-  >
+  <div id="mainTab">
+    <p class="hint">Select which protocols to apply. Applied ones can be removed. ABN text can still be toggled per protocol.</p>
 
-  <button id="applyBtn">Apply Protocols</button>
-  <div id="status"></div>
+    <div id="protocolList" class="protocol-list">
+      <div class="empty">No tracked protocols yet. Switch to Settings to add some.</div>
+    </div>
 
+    <label class="abn-label" for="abnText">ABN text</label>
+    <textarea id="abnText" class="custom-input">ABN signed</textarea>
+
+    <div class="btn-row">
+      <button id="applyProtocolsBtn" class="action" type="button">Apply Protocols</button>
+      <button id="refreshMainBtn" class="action tertiary" type="button">Refresh status</button>
+    </div>
+    <div id="mainStatus"></div>
+  </div>
+
+  <div id="settingsTab" class="hidden">
+    <p class="hint">
+      Add protocols to track. Apply uses protocolId. Detect walks overview diagnoses[] and
+      finds the row whose procedures match the test (several rows can be named “All Tests”;
+      each has its own diagnoses[].id such as 73811429). Collect stores procedureCatalogId
+      from that row; Remove DELETEs that visitDiagnosis id.
+    </p>
+
+    <div class="add-box">
+      <div class="row"><input id="newName" class="custom-input" placeholder="Name (e.g. Optic Nerve)" /></div>
+      <div class="row"><input id="newProtocolId" class="custom-input" placeholder="Protocol ID (apply)" /></div>
+      <div class="row"><input id="newAliases" class="custom-input" placeholder="Optional aliases (comma-separated)" /></div>
+      <div class="row"><input id="newProcedureId" class="custom-input" placeholder="Optional procedure catalog ID (detect)" /></div>
+      <button id="addBtn" class="action secondary" type="button">Add to tracked tests</button>
+    </div>
+
+    <div id="targetList" class="target-list">
+      <div class="muted">No tracked tests yet.</div>
+    </div>
+
+    <div class="btn-row">
+      <button id="collectBtn" class="action secondary" type="button">Collect procedure IDs from visit</button>
+      <button id="copyBtn" class="action tertiary" type="button">Copy tracked JSON</button>
+    </div>
+    <div id="settingsStatus"></div>
+  </div>
+
+  <script src="targets.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>
