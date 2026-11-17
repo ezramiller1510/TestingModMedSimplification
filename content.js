@@ -977,16 +977,26 @@ async function checkTargetsApplied() {
   const stored = await chrome.storage.local.get(["protocolMappings"]);
   const mappings = stored.protocolMappings || {};
   const overview = await loadVisitOverview(visitId);
+  
+  // Ensure these exist or fallback to empty arrays to prevent reference errors
+  const catalogHits = overview.catalogHits || [];
+  const hitKeys = overview.hitKeys || [];
 
   const results = targets.map((target) => {
     const mapping = mappings[target.key] || emptyMapping(target);
     const overviewHit = catalogHits.find((h) => h.key === target.key) || null;
+    
     const wantedIds = new Set(
       []
         .concat(mapping.procedureCatalogId ? [String(mapping.procedureCatalogId)] : [])
         .concat(target.procedureCatalogId ? [String(target.procedureCatalogId)] : [])
         .concat(mapping.procedureCatalogIds || [])
-        .map(String),
+        .map(String)
+    );
+
+    // Properly formed object instead of mixing it into new Set()
+    const merged = {
+      wantedIds,
       diagnosisCatalogId: target.diagnosisCatalogId || mapping.diagnosisCatalogId || null,
       procedureName: mapping.procedureName || target.procedureName || null,
       procedureAlias: mapping.procedureAlias || target.procedureAlias || null,
