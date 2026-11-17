@@ -47,17 +47,16 @@ function renderTargets(mappings) {
   PROTOCOL_TARGETS.forEach((target) => {
     const m = mappings[target.key] || emptyMapping(target);
     const hasProtocol = Boolean(m.protocolId);
-    const hasDiagnosis = Boolean(m.diagnosisCatalogId);
-    const procCount = (m.procedureCatalogIds || []).length;
+    const hasProcedure = Boolean(m.procedureCatalogId || (m.procedureCatalogIds || []).length);
+    const procLabel = m.procedureName || m.procedureAlias || "";
 
     const row = document.createElement("div");
     row.className = "target";
     row.innerHTML =
       `<strong>${target.name}</strong><br>` +
       `<span class="${hasProtocol ? "ok" : "missing"}">protocolId: ${m.protocolId || "missing"}</span><br>` +
-      `<span class="${hasDiagnosis ? "ok" : "missing"}">diagnosisCatalogId: ${m.diagnosisCatalogId || "missing"}</span>` +
-      (m.diagnosisName ? ` <span>(${m.diagnosisName})</span>` : "") +
-      `<br><span class="${procCount ? "ok" : "missing"}">procedures: ${procCount}</span>`;
+      `<span class="${hasProcedure ? "ok" : "missing"}">procedureCatalogId: ${m.procedureCatalogId || "missing"}</span>` +
+      (procLabel ? ` <span>(${procLabel})</span>` : "");
     list.appendChild(row);
 
     const opt = document.createElement("option");
@@ -80,7 +79,7 @@ function formatCollectResult(response) {
 
   (response.mappings || []).forEach((m) => {
     lines.push(
-      `- ${m.name}: protocolId=${m.protocolId || "?"} diagnosis=${m.diagnosisCatalogId || "?"} procs=[${(m.procedureCatalogIds || []).join(", ")}]`
+      `- ${m.name}: protocolId=${m.protocolId || "?"} procedureCatalogId=${m.procedureCatalogId || "?"} (${m.procedureName || m.procedureAlias || "—"})`
     );
   });
 
@@ -122,7 +121,7 @@ document.getElementById("collectBtn").addEventListener("click", async () => {
 });
 
 document.getElementById("checkBtn").addEventListener("click", async () => {
-  setBusy(true, "Checking visit overview for collected catalog IDs...");
+  setBusy(true, "Checking visit overview for procedure catalog IDs...");
   try {
     const response = await sendToTab("CHECK_TARGETS_APPLIED");
     await refreshUi(formatCheckResult(response));

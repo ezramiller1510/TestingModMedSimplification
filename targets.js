@@ -1,14 +1,18 @@
-// Shared target list: apply uses protocolId; detect uses catalog IDs from visit overview.
+// Shared target list:
+// - protocolId = apply (POST /protocols)
+// - procedureCatalogId(s) = detect (visit overview procedures)
+// Detect is procedure-based on purpose: diagnoses like special-test buckets can group
+// multiple imaging tests (e.g. Optos vs Anterior Segment) under one diagnosis.
 var PROTOCOL_TARGETS = [
   {
     key: "visual-field",
     name: "Visual Field",
-    aliases: ["visual field", "visual fields", "vf", "hvfonline", "humphrey"]
+    aliases: ["visual field", "visual fields", "hvfonline", "humphrey visual"]
   },
   {
     key: "optos",
     name: "Optos",
-    aliases: ["optos"]
+    aliases: ["optos", "optomap"]
   },
   {
     key: "cct",
@@ -23,18 +27,18 @@ var PROTOCOL_TARGETS = [
       "oct, optic nerve",
       "oct optic nerve",
       "optic nerve topography",
-      "glaucoma tests"
+      "opticnervetopography"
     ]
   },
   {
     key: "anterior-segment",
     name: "Anterior Segment",
-    aliases: ["anterior segment", "as-oct", "as oct"]
+    aliases: ["anterior segment", "as-oct", "as oct", "anterior oct"]
   },
   {
     key: "retina",
     name: "Retina",
-    aliases: ["retina", "macular oct", "oct macula", "oct, retina"]
+    aliases: ["retina", "macular oct", "oct macula", "oct, retina", "oct retina"]
   }
 ];
 
@@ -57,10 +61,16 @@ function emptyMapping(target) {
     key: target.key,
     name: target.name,
     protocolId: null,
-    diagnosisCatalogId: null,
-    diagnosisName: null,
+    // Primary detect key
+    procedureCatalogId: null,
+    procedureName: null,
+    procedureAlias: null,
+    // Extra matched procedures for the same target, if any
     procedureCatalogIds: [],
     procedures: [],
+    // Diagnosis kept only as context, not used for detect
+    diagnosisCatalogId: null,
+    diagnosisName: null,
     sources: [],
     updatedAt: null
   };
