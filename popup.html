@@ -224,8 +224,9 @@
 
   <div id="settingsTab" class="hidden">
     <p class="hint">
-      Add protocols to track. Apply uses protocolId. Detect/Remove use procedure catalog ID
-      <b>and</b> diagnosis catalog ID (tests can share names like “All Tests”).
+      Add protocols to track. Apply uses protocolId. Detect finds the diagnoses[] row that
+      contains the test (many can be named “All Tests”, each with its own visitDiagnosis id).
+      Collect stores procedureCatalogId + diagnosisCatalogId from that row.
     </p>
 
     <div class="add-box">
